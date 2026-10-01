@@ -66,18 +66,28 @@ namespace Te1000Daemon
         // Get-TreeItem (L3039-3047): LookupTreeItem; throw if not found.
         // XAE's own LookupTreeItem failure text formats the narrow path into a wide
         // string ("Item '䥔乁䅞...' not found"), so it is replaced with the path we
-        // sent. Retryable COM errors still propagate unchanged.
+        // sent. Only XAE's not-found HRESULT is rewritten; anything else (call
+        // rejected, RPC_E_DISCONNECTED, ...) propagates unchanged so retry and
+        // reconnect logic still sees it.
+        public const int TreeItemNotFoundHResult = unchecked((int)0x98510001);
+
         public static dynamic GetTreeItem(dynamic sysManager, string treePath)
         {
-            dynamic item;
-            try { item = sysManager.LookupTreeItem(treePath); }
+            dynamic item = FindTreeItem(sysManager, treePath);
+            if (item == null) throw new BridgeException("Tree item not found: " + treePath + " (0x98510001)");
+            return item;
+        }
+
+        // LookupTreeItem that returns null ONLY for a real not-found; every other
+        // COM failure is thrown, so callers never mistake an error for absence.
+        public static dynamic FindTreeItem(dynamic sysManager, string treePath)
+        {
+            try { return sysManager.LookupTreeItem(treePath); }
             catch (Exception ex)
             {
-                if (IsRetryableComError(ex)) throw;
-                throw new BridgeException("Tree item not found: " + treePath + " (" + ErrorCode(ex) + ")");
+                if (ex.HResult == TreeItemNotFoundHResult) return null;
+                throw;
             }
-            if (item == null) throw new BridgeException("Tree item not found: " + treePath);
-            return item;
         }
 
         // Undo XAE's narrow-into-wide formatting in COM error text: a quoted run

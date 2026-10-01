@@ -411,7 +411,7 @@ namespace Te1000Daemon
         // xae_save_project: EnvDTE.Project.Save() on exactly one project (e.g. the
         // System Manager .tsproj) instead of File.SaveAll. projectPath is a full
         // project file path, or a UniqueName/Name that must match exactly one
-        // project (solution folders are searched). solutionPath, when given, must
+        // project (nested projects are searched). solutionPath, when given, must
         // be the open solution. Reports the saved file and its on-disk stamp.
         private static Json.JObj XaeSaveProject(ActionContext ctx)
         {
@@ -449,18 +449,26 @@ namespace Te1000Daemon
             try { project.Save(); }
             catch (Exception ex) { throw new BridgeException("Project.Save failed for '" + file + "': " + ex.Message); }
 
+            Json.JObj after = FileStamp(file);
+            bool written = !(Json.Write(before) == Json.Write(after));
             var data = new Json.JObj();
-            data["saved"] = true;
+            // saved reflects the file on disk: Project.Save on an unmodified project
+            // may write nothing, which is reported as saved:false, unchanged:true.
+            data["saved"] = written;
+            data["unchanged"] = !written;
             data["projectName"] = ComHelpers.SafeStr(delegate { return project.Name; });
             data["uniqueName"] = ComHelpers.SafeStr(delegate { return project.UniqueName; });
             data["file"] = file;
             data["before"] = before;
-            data["after"] = FileStamp(file);
+            data["after"] = after;
             data["solution"] = openSolution;
             return data;
         }
 
-        // Solution.Projects plus projects nested in solution folders.
+        // Solution.Projects plus nested projects: solution-folder members and any
+        // SubProject reachable through ProjectItems (e.g. a PLC project inside the
+        // System Manager .tsproj), at most 4 item levels below each project. A
+        // failing Projects.Item(i) is an error, not a silently skipped project.
         private const string SolutionFolderKind = "{66A26720-8FB5-11D2-AA7E-00C04F688DDE}";
 
         private static void CollectProjects(dynamic projects, List<dynamic> into)
@@ -468,8 +476,9 @@ namespace Te1000Daemon
             int count = ComHelpers.SafeInt(delegate { return projects.Count; });
             for (int i = 1; i <= count; i++)
             {
-                dynamic p = null;
-                try { p = projects.Item(i); } catch { }
+                dynamic p;
+                try { p = projects.Item(i); }
+                catch (Exception ex) { throw new BridgeException("Solution.Projects.Item(" + i.ToString(System.Globalization.CultureInfo.InvariantCulture) + ") failed: " + ex.Message + " (nothing saved)"); }
                 if (p != null) AddProject(p, into);
             }
         }
@@ -477,13 +486,27 @@ namespace Te1000Daemon
         private static void AddProject(dynamic p, List<dynamic> into)
         {
             string kind = ComHelpers.SafeStr(delegate { return p.Kind; });
-            if (!string.Equals(kind, SolutionFolderKind, StringComparison.OrdinalIgnoreCase)) { into.Add(p); return; }
-            int n = ComHelpers.SafeInt(delegate { return p.ProjectItems.Count; });
+            if (!string.Equals(kind, SolutionFolderKind, StringComparison.OrdinalIgnoreCase)) into.Add(p);
+            dynamic items = null;
+            try { items = p.ProjectItems; } catch { }
+            AddSubProjects(items, into, 4);
+        }
+
+        private static void AddSubProjects(dynamic items, List<dynamic> into, int depth)
+        {
+            if (items == null || depth <= 0) return;
+            int n = ComHelpers.SafeInt(delegate { return items.Count; });
             for (int j = 1; j <= n; j++)
             {
+                dynamic item = null;
+                try { item = items.Item(j); } catch { }
+                if (item == null) continue;
                 dynamic sub = null;
-                try { sub = p.ProjectItems.Item(j).SubProject; } catch { }
-                if (sub != null) AddProject(sub, into);
+                try { sub = item.SubProject; } catch { }
+                if (sub != null) { AddProject(sub, into); continue; }
+                dynamic children = null;
+                try { children = item.ProjectItems; } catch { }
+                AddSubProjects(children, into, depth - 1);
             }
         }
 

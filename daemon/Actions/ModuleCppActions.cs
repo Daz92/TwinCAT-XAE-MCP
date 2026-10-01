@@ -52,26 +52,40 @@ namespace Te1000Daemon
         private static Json.JObj ModuleList(ActionContext ctx)
         {
             dynamic sm = ctx.SysManager();
-            ITcSysManager4 typedSm = (ITcSysManager4)sm;
-            ITcModuleManager3 mgr = (ITcModuleManager3)typedSm.GetModuleManager();
-
             var modules = new Json.JArr();
-            IEnumerator en = ((IEnumerable)mgr).GetEnumerator();
-            while (en.MoveNext())
+            string step = "GetModuleManager";
+            try
             {
-                ITcModuleInstance2 mi = en.Current as ITcModuleInstance2;
-                if (mi == null) continue;
+                ITcSysManager4 typedSm = (ITcSysManager4)sm;
+                ITcModuleManager3 mgr = (ITcModuleManager3)typedSm.GetModuleManager();
+                // The manager's own enumerator (IEnumerable / _NewEnum) fails with
+                // DISP_E_MEMBERNOTFOUND through the embedded interop, so the
+                // Modules collection is indexed instead (base probed: 0 or 1).
+                step = "Modules";
+                ITcModuleInstanceCollection col = mgr.Modules;
+                int count = col.Count;
+                var seen = new HashSet<uint>();
+                for (int i = 0; i <= count; i++)
+                {
+                    ITcModuleInstance2 mi;
+                    step = "Modules.Item(" + i.ToString(CultureInfo.InvariantCulture) + ")";
+                    try { mi = col[i] as ITcModuleInstance2; }
+                    catch (Exception) { if (i == 0 || i == count) continue; throw; }
+                    if (mi == null) continue;
 
-                uint oid = mi.oid;
-                var m = new Json.JObj();
-                m["moduleTypeName"] = mi.ModuleTypeName;
-                m["moduleInstanceName"] = mi.ModuleInstanceName;
-                m["classId"] = mi.ClassID.ToString();
-                m["oid"] = (long)oid;
-                m["objectId"] = (long)oid;
-                m["parentOid"] = (long)mi.ParentOID;
-                modules.Add(m);
+                    var m = new Json.JObj();
+                    step = "oid"; uint oid = mi.oid;
+                    if (!seen.Add(oid)) continue;
+                    step = "ModuleTypeName"; m["moduleTypeName"] = mi.ModuleTypeName;
+                    step = "ModuleInstanceName"; m["moduleInstanceName"] = mi.ModuleInstanceName;
+                    step = "ClassID"; m["classId"] = mi.ClassID.ToString();
+                    m["oid"] = (long)oid;
+                    m["objectId"] = (long)oid;
+                    step = "ParentOID"; m["parentOid"] = (long)mi.ParentOID;
+                    modules.Add(m);
+                }
             }
+            catch (Exception ex) { throw new BridgeException("module list failed at " + step + ": " + ex.Message); }
 
             var data = new Json.JObj();
             data["count"] = modules.Count;
@@ -294,9 +308,15 @@ namespace Te1000Daemon
             dynamic reloaded = ComHelpers.GetTreeItem(sm, path);
             TccomSnapshot after = ReadTccomSnapshot(sm, reloaded, path);
             data["after"] = after.Identity();
-            data["changes"] = DiffRecords(before.Records, after.Records);
+            Json.JObj changes = DiffRecords(before.Records, after.Records);
+            data["changes"] = changes;
+            int linksLost = 0;
+            foreach (object k in (Json.JArr)changes["removed"])
+                if (((string)k).StartsWith("link:", StringComparison.Ordinal)) linksLost++;
+            data["linksLost"] = linksLost;
 
             var problems = new List<string>();
+            if (linksLost > 0) problems.Add(linksLost.ToString(CultureInfo.InvariantCulture) + " variable link(s) lost");
             if (after.Path != before.Path) problems.Add("path changed to '" + after.Path + "'");
             if (after.ClassId != before.ClassId) problems.Add("ClassID changed to " + after.ClassId.ToString("B"));
             if (after.ObjectId != before.ObjectId) problems.Add("ObjectId changed from " + before.ObjectId + " to " + after.ObjectId);
@@ -330,7 +350,7 @@ namespace Te1000Daemon
 
             dynamic sm = ctx.SysManager();
             dynamic parent = ComHelpers.GetTreeItem(sm, parentPath);
-            dynamic item = ComHelpers.TryGetTreeItem(sm, childPath);
+            dynamic item = ComHelpers.FindTreeItem(sm, childPath);
             var data = new Json.JObj();
             data["treePath"] = childPath;
             if (item == null) { data["action"] = "absent"; return data; }
@@ -378,7 +398,7 @@ namespace Te1000Daemon
             catch (Exception ex) { throw new BridgeException("DeleteChild failed for '" + childPath + "': " + ex.Message); }
             ctx.Cache.Invalidate(parentPath);
             ctx.Cache.InvalidateEnum();
-            if (ComHelpers.TryGetTreeItem(sm, childPath) != null)
+            if (ComHelpers.FindTreeItem(sm, childPath) != null)
                 throw new BridgeException("'" + childPath + "' still resolves after DeleteChild");
             data["action"] = "deleted";
             return data;
@@ -879,13 +899,16 @@ namespace Te1000Daemon
             {
                 reason = "returned child has a blank name";
             }
-            else if (childActualName != requestedName)
+            // XAE appends the module type to a TcCOM instance name:
+            // "<name> (<ModuleTypeName>)" is the same child, not a ghost.
+            else if (childActualName != requestedName &&
+                !(childActualName.StartsWith(requestedName + " (", StringComparison.Ordinal) && childActualName.EndsWith(")", StringComparison.Ordinal)))
             {
                 reason = "returned child name '" + childActualName + "' does not match requested name '" + requestedName + "'";
             }
             else
             {
-                string expectedPath = parentPath + "^" + requestedName;
+                string expectedPath = parentPath + "^" + childActualName;
                 if (!string.IsNullOrWhiteSpace(childPath) && childPath != expectedPath)
                 {
                     reason = "returned child path '" + childPath + "' is not under requested parent (expected '" + expectedPath + "')";
