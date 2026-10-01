@@ -248,4 +248,7 @@ async function runViaDaemon(action, payload = {}) {
   throw toError(action, resp);
 }
 
-module.exports = { runViaDaemon, PIPE_NAME, EXE_PATH };
+// In-flight daemon requests (used by index.js to drain before exiting).
+function pendingCount() { return pending.size; }
+
+module.exports = { runViaDaemon, pendingCount, PIPE_NAME, EXE_PATH };

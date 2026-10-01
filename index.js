@@ -198,8 +198,12 @@ function buildServer() {
 server.registerTool(
   "xae",
   toolSchemas.xae,
-  async ({ action, solutionPath, closeExisting, discardChanges, filter, limit, severityFilter, button, remember, mode }) => {
+  async ({ action, solutionPath, projectPath, closeExisting, discardChanges, filter, limit, severityFilter, button, remember, mode }) => {
     const payload = { mode };
+    if (action === "save_project") {
+      need({ projectPath }, ["projectPath"], action);
+      Object.assign(payload, { projectPath, solutionPath });
+    }
     if (action === "open_solution") {
       need({ solutionPath }, ["solutionPath"], action);
       Object.assign(payload, { solutionPath, visible: true, closeExisting: closeExisting || false, discardChanges: discardChanges === true, mode: mode || "activeOrCreate" });
@@ -548,7 +552,9 @@ server.registerTool(
       case "check_objects":
         return textResult(await bridgeCall("plc_pou_check_objects", { plcPath: p.plcPath }));
       case "replace":
-        need(p, ["path", "find", "replaceWith"], p.action);
+        need(p, ["path", "find"], p.action);
+        // "" is a legal replaceWith (deletes the match); only absence is an error.
+        if (typeof p.replaceWith !== "string") throw new Error("'replaceWith' is required for action=replace (\"\" deletes the match)");
         return textResult(await bridgeCall("plc_pou_replace", {
           path: p.path, target: p.target, find: p.find, replaceWith: p.replaceWith,
           expectCount: p.expectCount, validate: p.validate === true, save: p.save === true,
@@ -827,6 +833,21 @@ server.registerTool(
         }
         need(p, ["path", "taskObjectId"], p.action);
         return textResult(await bridgeCall("twincat_module_set_context", { path: p.path, taskObjectId: p.taskObjectId, contextId: p.contextId }));
+      case "reload_tmc":
+        need(p, ["modulePath", "tmcPath", "expectedClassId", "expectedCurrentClassFactoryId", "expectedTargetClassFactoryId"], p.action);
+        return textResult(await bridgeCall("twincat_module_reload_tmc", {
+          modulePath: p.modulePath, tmcPath: p.tmcPath, expectedClassId: p.expectedClassId,
+          expectedCurrentClassFactoryId: p.expectedCurrentClassFactoryId, expectedTargetClassFactoryId: p.expectedTargetClassFactoryId,
+          dryRun: p.dryRun === true,
+        }));
+      case "delete_unlinked":
+        need(p, ["parentPath", "instanceName", "expectedClassId"], p.action);
+        if (p.dryRun !== true && p.confirm !== DELETE_CONFIRMATION) {
+          throw new Error('Blocked. delete_unlinked removes a TcCOM instance. Re-run with dryRun:true to check it, or confirm="' + DELETE_CONFIRMATION + '" to delete.');
+        }
+        return textResult(await bridgeCall("twincat_module_delete_unlinked", {
+          parentPath: p.parentPath, instanceName: p.instanceName, expectedClassId: p.expectedClassId, dryRun: p.dryRun === true,
+        }));
     }
   },
 );
@@ -988,6 +1009,22 @@ server.registerTool(
 
 function main() {
   serveStdio(buildServer, { onerror: (error) => console.error("Server error:", error) });
+  // The daemon pipe socket keeps the event loop alive, so a client that goes
+  // away (ssh session closed, stdin EOF/broken) would otherwise leave this
+  // front running forever. The daemon itself is a separate process and stays.
+  // In-flight daemon calls are let finish (the daemon would complete them
+  // anyway) and stdout is flushed before exiting; a broken stdout just exits.
+  let quitting = false;
+  const quit = () => {
+    if (quitting) return;
+    quitting = true;
+    const flush = () => process.stdout.write("", () => process.exit(0));
+    const wait = () => (daemonClient.pendingCount() === 0 ? setTimeout(flush, 100) : setTimeout(wait, 200));
+    wait();
+  };
+  process.stdout.on("error", () => process.exit(0));
+  for (const ev of ["end", "close", "error"]) process.stdin.on(ev, quit);
+  for (const sig of ["SIGHUP", "SIGTERM", "SIGINT"]) process.on(sig, quit);
   console.error("te1000-mcp server running on stdio (native daemon mode; MCP 2026-07-28 stateless + legacy initialize)");
 }
 

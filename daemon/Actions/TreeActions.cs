@@ -235,12 +235,12 @@ namespace Te1000Daemon
             dynamic item = ctx.Cache.LookupItem(sm, treePath);
 
             var children = new Json.JArr();
-            int count = ComHelpers.ChildCount(item);
+            List<dynamic> standardChildren = ComHelpers.Children(item);
+            int count = standardChildren.Count;
             var listedNames = new HashSet<string>(StringComparer.Ordinal);
 
-            for (int i = 1; i <= count; i++)
+            foreach (dynamic childItem in standardChildren)
             {
-                dynamic childItem = ComHelpers.Child(item, i);
                 Json.JObj childEntry = ComHelpers.ConvertTreeItem(childItem);
                 childEntry["kind"] = "child";
                 children.Add(childEntry);
@@ -1049,10 +1049,8 @@ namespace Te1000Daemon
         // ParentItem has the given name (1-based scan).
         private static bool ChildExistsByName(dynamic parentItem, string childName)
         {
-            int count = ComHelpers.ChildCount(parentItem);
-            for (int i = 1; i <= count; i++)
+            foreach (dynamic child in ComHelpers.Children(parentItem))
             {
-                dynamic child = ComHelpers.Child(parentItem, i);
                 string name = ComHelpers.SafeStr(delegate { return child.Name; });
                 if (name == childName) return true;
             }

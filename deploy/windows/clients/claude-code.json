@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "te1000": {
+      "type": "stdio",
+      "command": "ssh",
+      "args": [
+        "-T", "-o", "BatchMode=yes", "<host>",
+        "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-File", "C:\\Users\\<user>\\AppData\\Local\\TwinCAT-XAE-MCP\\deploy\\windows\\te1000-mcp-launch.ps1",
+        "-Pipe", "te1000"
+      ]
+    }
+  }
+}

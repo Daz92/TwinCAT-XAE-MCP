@@ -61,6 +61,13 @@ XAE shell and solution control.
 - `open_solution` (`solutionPath`) — open a solution. `closeExisting: true` closes the current
   one first (save-first by default; add `discardChanges: true` to close **without** saving).
 - `save_all`, `active_document`, `selected_items`, `error_list`, `clear_error_list`.
+- `save_project` (`projectPath`, `solutionPath?`) — `EnvDTE.Project.Save()` on exactly one project
+  instead of File.SaveAll. `projectPath` is a full project file path or a `UniqueName`/`Name`
+  matching exactly one project (solution folders included); zero or several matches refuse and
+  list the projects. `solutionPath`, when given, must be the open solution. Reports the saved
+  `file` with before/after on-disk stamps; `saved` is true only if the file changed on disk
+  (otherwise `saved: false, unchanged: true`). Nested projects reachable through `ProjectItems`
+  are searched too.
 - `list_commands` (`filter` regex, `limit`) — discover available DTE command names.
 
 ### `xae_build`
@@ -214,7 +221,8 @@ paths refuse `TISC` (safety) paths.
   XML for LD/FBD/IL/SFC/CFC bodies (which have no authoritative text). Diagnostic only — graphical
   bodies are not text-editable here.
 - **Whole-section write** — `set_decl`, `set_decl_batch`, `set_impl`, `set_impl_batch`, `set_document`.
-- **Surgical edit (read-modify-write)** — `replace` (literal substring + `expectCount` gate),
+- **Surgical edit (read-modify-write)** — `replace` (literal substring + `expectCount` gate;
+  `replaceWith: ""` deletes the match),
   `replace_lines` (1-based inclusive span), `insert` (`at`/`after`/`before`), `insert_in_var_block`,
   `append`. These return **only the changed region ±2 context lines**, preserve CRLF/LF byte-for-byte,
   and fail without writing on non-unique/zero-match anchors. `validate: true` runs CheckAllObjects after.
@@ -266,6 +274,23 @@ Non-EtherCAT fieldbuses (PROFINET / PROFIBUS / CANopen / DeviceNet / EAP): `crea
 ### `tc_module`
 TcCOM module objects: `list`, `create`, `get_xml`, `set_xml`, `enable_symbols`,
 `set_context` 🔒 `ALLOW_TWINCAT_MODULE_CONTEXT`. Refuses `TISC` paths.
+
+- `reload_tmc` (`modulePath`, `tmcPath`, `expectedClassId`, `expectedCurrentClassFactoryId`,
+  `expectedTargetClassFactoryId`, `dryRun?`) — offline TcCOM description reload
+  (`ConsumeXml` `<ReloadTmc Path=… Mode="warm">true</ReloadTmc>`, saved settings restored;
+  [Beckhoff: Reloading TMC files](https://infosys.beckhoff.com/content/1033/tc3_automationinterface/21842689291.html)).
+  Pre-checks: instance ClassID and current ClassFactoryId (`vendor|library|version`) match; the TMC
+  declares the target `vendor|library|version` and exactly one `Module` with that ClassID, the same
+  module name and `CLSID@ClassFactory` = library. Post-checks: path, ClassID and ObjectId unchanged
+  and ClassFactoryId switched to the target — otherwise it errors without claiming success (the
+  reload is applied but unsaved); a removed mapping link (`linksLost > 0`) is such a failure too.
+  The result lists `changes {added, removed, changed}` over
+  parameter values, data areas/symbols, contexts and mapping links. Like `set_xml` this is an
+  unsaved offline config edit, so no confirm token; `dryRun: true` runs only the pre-checks.
+- `delete_unlinked` 🔒 `ALLOW_TWINCAT_DELETE` (`parentPath`, `instanceName`, `expectedClassId`,
+  `dryRun?`) — delete one instance under `TIRC^TcCOM Objects` (or a folder below it) only when its
+  ClassID matches and neither it nor any descendant has a variable link (`ProduceMappingInfo`
+  owners, then the `<LinkedWith>` tree walk). An absent instance returns `action: "absent"`.
 
 ### `tc_cpp`
 TwinCAT C++ projects/modules: `create_project`, `create_module`, `open`, `tmc_codegen`,

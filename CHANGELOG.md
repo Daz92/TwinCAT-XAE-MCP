@@ -4,6 +4,45 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased (fork)]
+
+### Added
+- `tc_module reload_tmc` — offline TcCOM TMC reload (`<ReloadTmc Mode="warm">`) with identity
+  pre-checks against the instance and the reviewed TMC, post-checks (path/ClassID/ObjectId
+  unchanged, ClassFactoryId switched to the target) and a record-level change report. Fails
+  without claiming success when the version did not change. `dryRun` supported; no confirm token
+  (unsaved offline edit, like `set_xml`).
+- `tc_module delete_unlinked` — delete one TcCOM instance only when its ClassID matches and it
+  and its descendants carry no variable links; `dryRun`, guarded by `ALLOW_TWINCAT_DELETE`.
+- `xae save_project` — `Project.Save()` on exactly one project (path, UniqueName or Name);
+  refuses ambiguity, reports the file saved. `save_all` is unchanged.
+- `deploy/windows/`: `install.ps1` (idempotent npm ci + build + interactive scheduled task
+  `TE1000-Daemon-<pipe>` + pipe ping), `te1000-daemon-run.ps1`, `te1000-mcp-launch.ps1`, and
+  client snippets for Claude Code, OpenCode and Codex under `clients/`.
+
+### Fixed
+- `plc_pou replace` accepts `replaceWith: ""` (deletes the match); only a missing value is rejected.
+- Child enumeration no longer trusts a `ChildCount` of 0: `tc_tree children`, reported
+  `childCount`, the link walk (`tc_link get`) and child-name checks fall back to the COM
+  enumerator / `Child(i)` (e.g. `TIPC^<plc>^<plc> Instance` now lists its task images, TcCOM
+  instances their data areas).
+- Tree-lookup errors name the requested path instead of XAE's garbled text
+  (`Item '䥔乁䅞...' not found` → `Tree item not found: TIAN^ANALYTICS (0x98510001)`); other COM
+  error text with that narrow-into-wide quoting is repaired before it is returned. Only XAE's
+  not-found HRESULT (0x98510001) is rewritten; other COM errors (e.g. RPC_E_DISCONNECTED)
+  propagate unchanged, and `delete_unlinked` reports `absent` only for a real not-found.
+- The Node front exits when its stdin closes (or on SIGHUP/SIGTERM/SIGINT) instead of lingering
+  on the daemon pipe after its client is gone; in-flight daemon calls and stdout are drained first.
+- `tc_module create` accepts the `<name> (<ModuleTypeName>)` name XAE gives a TcCOM instance
+  instead of deleting it as a ghost, and returns the real child path.
+- `tc_module list` indexes `ITcModuleManager3.Modules`; the manager enumerator failed with
+  `DISP_E_MEMBERNOTFOUND` through the embedded interop.
+- `tc_module reload_tmc` treats a lost mapping link as a failed reload (`linksLost`).
+- `xae save_project` searches nested projects, fails on an unreadable `Projects.Item`, and
+  reports `saved: false, unchanged: true` when the file did not change on disk.
+- `install.ps1` refuses to take over an existing task that runs another install (`-Force`
+  overrides) and takes `-RunLevel Limited|Highest`. Client snippets all name the server `te1000`.
+
 ## [2.4.0] — 2026-08-12
 
 MCP protocol upgrade: the server now speaks the **2026-07-28 stateless protocol
