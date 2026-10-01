@@ -365,6 +365,18 @@ namespace Te1000Daemon
         //    Consuming TIAN XML that LISTS a StreamContext selected it (Hide->false,
         //    and Hide=true in that same XML did not stick). So TIAN writes never echo
         //    the produced StreamContexts by default (contextsMode 'omit').
+        //  - TIAN/stream XML is only a PROJECTION of TF3500's managed model
+        //    (TwinCAT.Analytics.Logger.SystemManagerExtension 4.4.93, read by
+        //    reflection): ConfigModel.ReCalc reads the TIAN XML back through
+        //    RestoreProperties -> ImportStreamTargets (add/update by Id, NEVER
+        //    removes) and RestoreStreamSources (StreamContexts/Hide), then
+        //    SaveProperties -> SendConfigToTreeItem republishes the WHOLE model.
+        //    StreamModel.ReCalc never reads Config back; it only republishes. So a
+        //    target removed from the XML returns on the next model republish, and a
+        //    stream Config written to the stream item is overwritten. The only
+        //    importer of stream Config (ConfigModel.Import via the ImportConfiguration
+        //    command) opens a file dialog. target_remove and stream_edit therefore
+        //    refuse instead of writing something the model will undo.
         // Every write is read-modify-write of the FULL produced XML inside the
         // daemon (a partial TIAN ConsumeXml replaced the whole Config and wiped all
         // targets). Credentials never leave the daemon: MQTT settings are redacted
@@ -583,13 +595,13 @@ namespace Te1000Daemon
             into[p + ".SymbolNames"] = new string[] { syms, syms };
         }
 
-        private static Dictionary<string, string[]> FlattenAll(XmlDocument tian, List<AlyStream> streams, AlyStream replaced, XmlDocument replacement)
+        private static Dictionary<string, string[]> FlattenAll(XmlDocument tian, List<AlyStream> streams)
         {
             var d = new Dictionary<string, string[]>();
             FlattenTian(tian, d);
             foreach (AlyStream st in streams)
             {
-                FlattenStream(st.Oid, st.Name, (replaced != null && st.Oid == replaced.Oid) ? replacement : st.Doc, d);
+                FlattenStream(st.Oid, st.Name, st.Doc, d);
             }
             return d;
         }
@@ -656,7 +668,7 @@ namespace Te1000Daemon
         private static Json.JObj StreamModel(AlyStream st, bool verbose)
         {
             var o = new Json.JObj();
-            o["oid"] = st.Oid;
+            o["streamOid"] = st.Oid;
             o["name"] = st.Name;
             o["path"] = st.Path;
             XmlElement aly = st.Doc.SelectSingleNode("/TreeItem/AnalyticsStream") as XmlElement;
@@ -692,6 +704,10 @@ namespace Te1000Daemon
             AlySnapshot s = ReadAnalytics(sm);
             bool verbose = ctx.Payload.Bool("verbose", false);
             var m = new Json.JObj();
+            var flat = FlattenAll(s.TianDoc, s.Streams);
+            Json.JArr drift = Drift(flat);
+            if (drift != null) m["driftSinceLastCall"] = drift;
+            _lastSeen = flat;
             m["activateAlyLogger"] = Text(s.TianDoc, "/TreeItem/AnalyticsConfig/Config/ActivateAlyLogger");
 
             var targets = new Json.JArr();
@@ -699,7 +715,7 @@ namespace Te1000Daemon
             {
                 string id = NormGuid(t.GetAttribute("Id"));
                 var o = new Json.JObj();
-                o["id"] = id;
+                o["targetId"] = id;
                 // FILE targets carry an unused MqttConnectionSettings block; keep it out of the summary.
                 o["fields"] = LeafObj(t, Text(t, "Type") == "FILE" ? "MqttConnectionSettings" : null);
                 var refs = new Json.JArr();
@@ -755,16 +771,12 @@ namespace Te1000Daemon
         // Apply {"A": v, "B.C": v, "D": {"E": v}} onto existing LEAF elements under
         // root. Unknown/non-leaf paths and *Crypted leaves are refused (the crypted
         // values are produced by XAE's Broker Connect dialog; clone them via copyFrom).
-        private static void ApplyLeaves(XmlElement root, Json.JObj values, string prefix, string[] refusedTop)
+        private static void ApplyLeaves(XmlElement root, Json.JObj values, string prefix)
         {
             if (values == null) return;
             foreach (var kv in values)
             {
                 string[] parts = kv.Key.Split('.');
-                if (refusedTop != null && prefix.Length == 0 && Array.IndexOf(refusedTop, parts[0]) >= 0)
-                {
-                    throw new BridgeException("'" + kv.Key + "' cannot be set by this action.");
-                }
                 XmlElement cur = root;
                 foreach (string p in parts)
                 {
@@ -773,7 +785,7 @@ namespace Te1000Daemon
                     cur = next;
                 }
                 Json.JObj nested = kv.Value as Json.JObj;
-                if (nested != null) { ApplyLeaves(cur, nested, prefix + kv.Key + ".", null); continue; }
+                if (nested != null) { ApplyLeaves(cur, nested, prefix + kv.Key + "."); continue; }
                 if (HasElementChild(cur)) throw new BridgeException("Field '" + prefix + kv.Key + "' is not a leaf; address its children instead.");
                 if (cur.Name.EndsWith("Crypted", StringComparison.Ordinal))
                 {
@@ -818,14 +830,6 @@ namespace Te1000Daemon
             return hit;
         }
 
-        private static void CheckTargetRef(XmlDocument tian, Json.JObj config)
-        {
-            if (config == null || !config.Has("TargetId")) return;
-            string id = NormGuid(config.Str("TargetId"));
-            FindTarget(tian, id);
-            config["TargetId"] = id;
-        }
-
         // TIAN ConsumeXml payload: the full planned document with StreamContexts
         // handled per mode — 'omit' (default: drop the element, never re-select
         // sources), 'visibleOnly' (keep only Hide=false contexts), 'asProduced'
@@ -862,13 +866,18 @@ namespace Te1000Daemon
             var result = new Json.JObj();
             result["op"] = op;
             result["dryRun"] = dryRun;
+            Json.JArr drift = Drift(FlattenAll(before.TianDoc, before.Streams));
+            if (drift != null) result["driftSinceLastCall"] = drift;
+            if (drift != null && !dryRun && !p.Bool("acceptDrift", false))
+            {
+                throw new BridgeException("Analytics configuration changed since this daemon last read it (" + drift.Count.ToString(CultureInfo.InvariantCulture) +
+                    " keys, e.g. '" + ((Json.JObj)drift[0]).Str("key") + "'): XAE's Analytics model may have republished an older state. Inspect with analytics_get, then re-run with acceptDrift:true.");
+            }
 
             if (op == "stream_add") return StreamAdd(ctx, sm, before, result);
             if (op == "stream_remove") return StreamRemove(ctx, sm, before, result);
 
             XmlDocument planned = null;       // TIAN plan
-            AlyStream stream = null;          // stream_edit target
-            XmlDocument plannedStream = null;
             switch (op)
             {
                 case "logger_enable":
@@ -886,7 +895,7 @@ namespace Te1000Daemon
                     XmlElement t = FindTarget(planned, NormGuid(ctx.Require("targetId")));
                     Json.JObj fields = p.Obj("fields");
                     if (fields == null || fields.Count == 0) throw new BridgeException("fields is required");
-                    ApplyLeaves(t, fields, "", null);
+                    ApplyLeaves(t, fields, "");
                     break;
                 }
                 case "target_add":
@@ -916,22 +925,14 @@ namespace Te1000Daemon
                     string newId = Guid.NewGuid().ToString("D");
                     clone.SetAttribute("Id", newId);
                     template.ParentNode.AppendChild(clone);
-                    ApplyLeaves(clone, fields, "", null);
+                    ApplyLeaves(clone, fields, "");
                     result["newTargetId"] = newId;
                     break;
                 }
                 case "target_remove":
-                {
-                    string id = NormGuid(ctx.Require("targetId"));
-                    foreach (AlyStream st in before.Streams)
-                    {
-                        if (StreamTargetId(st) == id) throw new BridgeException("Target " + id + " is used by stream " + st.Oid + " ('" + st.Name + "'); retarget or remove that stream first.");
-                    }
-                    planned = CloneDoc(before.TianDoc);
-                    XmlElement t = FindTarget(planned, id);
-                    t.ParentNode.RemoveChild(t);
-                    break;
-                }
+                    throw new BridgeException("target_remove is not supported through the Automation Interface: TF3500's ConfigModel only adds/updates stream targets " +
+                        "from the TIAN XML (ImportStreamTargets) and republishes its full target list on the next recalc, so a removed target comes back " +
+                        "(seen live: a removed clone reappeared after the next Analytics write). Delete the target in XAE: Analytics > Stream Targets tab.");
                 case "context_hide":
                 {
                     if (!p.Has("hide")) throw new BridgeException("hide is required");
@@ -942,46 +943,62 @@ namespace Te1000Daemon
                     break;
                 }
                 case "stream_edit":
-                {
-                    stream = FindStream(before, p);
-                    Json.JObj config = p.Obj("config");
-                    if (config == null || config.Count == 0) throw new BridgeException("config is required");
-                    CheckTargetRef(before.TianDoc, config);
-                    plannedStream = CloneDoc(stream.Doc);
-                    XmlElement cfg = StreamConfig(plannedStream);
-                    if (cfg == null) throw new BridgeException("Produced stream XML has no AnalyticsStream/Config element.");
-                    ApplyLeaves(cfg, config, "", new string[] { "SymbolNames", "StreamProps" });
-                    break;
-                }
+                    throw new BridgeException("stream_edit is not supported through the Automation Interface: stream settings live in TF3500's StreamModel, " +
+                        "which republishes its own Config over the stream item on every recalc (a ConsumeXml there is silently undone, seen live) and has no " +
+                        "settings command; the only importer is the GUI Import Configuration dialog. Edit the stream in XAE: stream > Data Handling tab.");
                 default:
-                    throw new BridgeException("Unknown op '" + op + "'. Expected logger_enable|target_add|target_edit|target_remove|context_hide|stream_edit|stream_add|stream_remove.");
+                    throw new BridgeException("Unknown op '" + op + "'. Expected logger_enable|target_add|target_edit|context_hide|stream_add|stream_remove.");
             }
 
-            var beforeFlat = FlattenAll(before.TianDoc, before.Streams, null, null);
-            var plannedFlat = FlattenAll(planned ?? before.TianDoc, before.Streams, stream, plannedStream);
+            var beforeFlat = FlattenAll(before.TianDoc, before.Streams);
+            var plannedFlat = FlattenAll(planned, before.Streams);
             result["contextsMode"] = planned != null ? mode : null;
             result["plannedDiff"] = Diff(beforeFlat, plannedFlat);
             if (dryRun) { result["written"] = false; return result; }
 
-            if (planned != null) ComHelpers.ConsumeXml(before.Tian, TianPayload(planned, mode));
-            else ComHelpers.ConsumeXml(stream.Item, plannedStream.OuterXml);
+            ComHelpers.ConsumeXml(before.Tian, TianPayload(planned, mode));
             ctx.Cache.Invalidate("TIAN");
-            return Finish(sm, beforeFlat, plannedFlat, result);
+            return Finish(sm, p, beforeFlat, plannedFlat, result);
         }
 
-        // Re-read everything; report the actual before/after diff and every key
-        // where the result differs from the plan (Hide flips land here).
-        private static Json.JObj Finish(dynamic sm, Dictionary<string, string[]> beforeFlat, Dictionary<string, string[]> plannedFlat, Json.JObj result)
+        // Last full state this daemon saw (after a get, or the settled state after
+        // a write). Every call compares against it, so a model republish between
+        // calls (the resurrected-target case) is reported instead of silently
+        // becoming the next write's baseline.
+        // ponytail: one slot per daemon process, keyed by nothing; a second open
+        // solution would show up as drift, which is the safe direction.
+        private static Dictionary<string, string[]> _lastSeen;
+
+        private static Json.JArr Drift(Dictionary<string, string[]> now)
         {
+            Json.JArr d = _lastSeen == null ? null : Diff(_lastSeen, now);
+            return (d == null || d.Count == 0) ? null : d;
+        }
+
+        // Re-read the FULL state twice: right after the write and again after
+        // settleMs (default 2000), because the TF3500 model republishes on its own
+        // recalc. Diff/notAsPlanned use the settled read and cover every key of
+        // every target, context and stream; 'unstable' lists keys that moved
+        // between the two reads.
+        private static Json.JObj Finish(dynamic sm, Json.JObj p, Dictionary<string, string[]> beforeFlat, Dictionary<string, string[]> plannedFlat, Json.JObj result)
+        {
+            AlySnapshot first = ReadAnalytics(sm);
+            var firstFlat = FlattenAll(first.TianDoc, first.Streams);
+            int settle = Math.Max(0, Math.Min(10000, p.Int("settleMs", 2000)));
+            System.Threading.Thread.Sleep(settle);
             AlySnapshot after = ReadAnalytics(sm);
-            var afterFlat = FlattenAll(after.TianDoc, after.Streams, null, null);
+            var afterFlat = FlattenAll(after.TianDoc, after.Streams);
+            _lastSeen = afterFlat;
             result["written"] = true;
+            result["settleMs"] = settle;
             result["diff"] = Diff(beforeFlat, afterFlat);
+            Json.JArr unstable = Diff(firstFlat, afterFlat);
+            if (unstable.Count > 0) result["unstable"] = unstable;
             if (plannedFlat != null)
             {
                 Json.JArr off = Diff(plannedFlat, afterFlat);
                 result["notAsPlanned"] = off;
-                result["verified"] = off.Count == 0;
+                result["verified"] = off.Count == 0 && unstable.Count == 0;
             }
             return result;
         }
@@ -1013,15 +1030,16 @@ namespace Te1000Daemon
 
         // stream_add (EXPERIMENTAL, unverified live): CreateChild(name, subType=0)
         // on the context item, ghost-guarded (must come back ItemType 102 named
-        // <name>), then optional config applied by full-XML read-modify-write.
+        // <name>). TF3500 itself creates streams by ConsumeXml of
+        // <AddStream Name Oid IsEventBased/> on the context item
+        // (StreamContextModel.CreateStreamProgrammatically) - the fallback if
+        // CreateChild proves unusable.
         private static Json.JObj StreamAdd(ActionContext ctx, dynamic sm, AlySnapshot before, Json.JObj result)
         {
             Json.JObj p = ctx.Payload;
             string callerOid = NormOid(ctx.Require("callerOid"));
             string name = ctx.Require("name");
             int subType = p.Int("subType", 0);
-            Json.JObj config = p.Obj("config");
-            CheckTargetRef(before.TianDoc, config);
             foreach (AlyStream st in before.Streams)
             {
                 if (st.CallerOid == callerOid && st.Name == name) throw new BridgeException("Context " + callerOid + " already has a stream named '" + name + "' (" + st.Oid + ").");
@@ -1033,7 +1051,7 @@ namespace Te1000Daemon
             result["subType"] = subType;
             if (IsDryRun(p)) { result["written"] = false; return result; }
 
-            var beforeFlat = FlattenAll(before.TianDoc, before.Streams, null, null);
+            var beforeFlat = FlattenAll(before.TianDoc, before.Streams);
             dynamic child = ctxItem.CreateChild(name, subType, "", null);
             string actual = child == null ? null : ComHelpers.SafeStr(delegate { return child.Name; });
             int type = child == null ? -1 : ComHelpers.SafeInt(delegate { return child.ItemType; }, -1);
@@ -1044,16 +1062,8 @@ namespace Te1000Daemon
                     (child == null ? "null" : "name='" + actual + "', itemType=" + type.ToString(CultureInfo.InvariantCulture)) + "); any stray child was deleted. Add the stream in XAE (Stream Sources tab) instead.");
             }
             result["created"] = ComHelpers.ConvertTreeItem(child);
-            if (config != null && config.Count > 0)
-            {
-                XmlDocument d = LoadXml((string)ComHelpers.ProduceXml(child));
-                XmlElement cfg = StreamConfig(d);
-                if (cfg == null) throw new BridgeException("Stream created, but its XML has no AnalyticsStream/Config; config not applied.");
-                ApplyLeaves(cfg, config, "", new string[] { "SymbolNames", "StreamProps" });
-                ComHelpers.ConsumeXml(child, d.OuterXml);
-            }
             ctx.Cache.Invalidate("TIAN");
-            return Finish(sm, beforeFlat, null, result);
+            return Finish(sm, p, beforeFlat, null, result);
         }
 
         // stream_remove (unverified live): DeleteChild(<stream name>) on the
@@ -1065,10 +1075,10 @@ namespace Te1000Daemon
             result["stream"] = StreamModel(st, false);
             result["contextPath"] = ComHelpers.SafeStr(delegate { return parent.PathName; });
             if (IsDryRun(ctx.Payload)) { result["written"] = false; return result; }
-            var beforeFlat = FlattenAll(before.TianDoc, before.Streams, null, null);
+            var beforeFlat = FlattenAll(before.TianDoc, before.Streams);
             parent.DeleteChild(st.Name);
             ctx.Cache.Invalidate("TIAN");
-            Json.JObj r = Finish(sm, beforeFlat, null, result);
+            Json.JObj r = Finish(sm, ctx.Payload, beforeFlat, null, result);
             bool gone = false;
             foreach (object o in (Json.JArr)r["diff"])
             {

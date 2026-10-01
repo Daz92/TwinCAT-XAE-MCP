@@ -277,11 +277,16 @@ Scope + Analytics (`TIAN`): `scope_create`, `scope_add_child`, `scope_rename`,
 `logger_delete` 🔒, `stream_create`, `stream_delete` 🔒, `analytics_get`, `analytics_set`.
 
 `analytics_get` returns the native `TIAN` configuration with MQTT secrets redacted.
-`analytics_set` takes an `op`: `logger_enable`, `target_add` (`copyFrom` clones a
-target's encrypted credentials), `target_edit`, `target_remove` 🔒, `context_hide`,
-`stream_edit`, `stream_add` (experimental), `stream_remove` 🔒. Each write re-reads the
-full XML and changes only the requested fields. Pass `dryRun:true` to see `plannedDiff`;
-after a write, check `verified` and `notAsPlanned`. Do not use `tc_tree set_xml` on
+`analytics_set` takes an `op`: `logger_enable`, `target_add` (`copyFrom` takes a
+`targetId` and clones its encrypted credentials), `target_edit` (`targetId`),
+`context_hide`, `stream_add` (experimental), `stream_remove` 🔒. Each write re-reads the
+full XML and changes only the requested fields. Pass `dryRun:true` to see `plannedDiff`.
+After a write the full state is read twice (immediately and after `settleMs`); check
+`verified`, `notAsPlanned` and `unstable`. A write is refused when the state changed
+since the daemon's last read (`driftSinceLastCall`); re-read with `analytics_get` or pass
+`acceptDrift:true`. `target_remove` and `stream_edit` are refused: the TF3500 model behind
+`TIAN` never deletes targets it has seen and overwrites stream settings written to the
+stream item, so delete targets and edit stream settings in XAE. Do not use `tc_tree set_xml` on
 `TIAN`: a partial `ConsumeXml` replaces the whole `Config`, and echoing
 `StreamContexts` re-selects every source. `logger_create` is refused on the native
 model, which has no DataLogger objects.

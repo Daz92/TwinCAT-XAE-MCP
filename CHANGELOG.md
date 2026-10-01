@@ -13,13 +13,19 @@ All notable changes to this project are documented here. The format is based on
   (`callerOid`, `itemName`, `hide`) and their streams (OID, name, key `Config` fields,
   symbol count). Streams are hidden from `LookupTreeItem` and child enumeration; they are
   found through `TIAN` `AdiOids` + `LookupTreeItemById(0, oid)` (ItemType 102).
-- **`tc_measurement analytics_set`** — `op` = `logger_enable`, `target_add` / `target_edit` /
-  `target_remove`, `context_hide`, `stream_edit`, `stream_add` (experimental) /
-  `stream_remove`. Full-XML read-modify-write inside the daemon (credentials never leave
-  it), `dryRun` plan, and a redacted before/after diff plus `notAsPlanned` / `verified`
-  after every write. `target_remove` / `stream_remove` are delete-guarded. TIAN writes
-  drop `StreamContexts` by default (`contextsMode: omit`), because echoing them
-  re-selects every source (`Hide` true → false). Write paths are not yet verified live.
+- **`tc_measurement analytics_set`** — `op` = `logger_enable`, `target_add` / `target_edit`,
+  `context_hide`, `stream_add` (experimental) / `stream_remove` (delete-guarded).
+  Full-XML read-modify-write inside the daemon (credentials never leave it), `dryRun`
+  plan, and after every write a full-state re-read (immediate and after `settleMs`) with
+  a redacted diff, `notAsPlanned`, `unstable` and `verified`. Writes are refused while
+  the state differs from the daemon's last read (`driftSinceLastCall`, override
+  `acceptDrift`). TIAN writes drop `StreamContexts` by default (`contextsMode: omit`),
+  because echoing them re-selects every source. `logger_enable`, `target_add`,
+  `target_edit` and `context_hide` are verified live.
+- `target_remove` and `stream_edit` refuse with an explanation. The TIAN XML is a
+  projection of TF3500's managed model: its recalc imports targets add/update-only and
+  republishes them (a removed target came back live), and it overwrites stream `Config`
+  written to the stream item (a `SamplingDivider` edit was silently undone live).
 
 ### Fixed
 - `logger_create` on the native model now fails with a clear message instead of a

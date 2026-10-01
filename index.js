@@ -913,14 +913,14 @@ server.registerTool(
         return textResult(await bridgeCall("analytics_config_get", { ...base, verbose: p.verbose === true }));
       case "analytics_set":
         need(p, ["op"], p.action);
-        if ((p.op === "target_remove" || p.op === "stream_remove") && p.dryRun !== true && p.confirm !== DELETE_CONFIRMATION) {
+        if (p.op === "stream_remove" && p.dryRun !== true && p.confirm !== DELETE_CONFIRMATION) {
           throw new Error('Blocked. analytics_set op="' + p.op + '" removes Analytics configuration. Re-run with dryRun:true to preview, or confirm="' + DELETE_CONFIRMATION + '" to remove.');
         }
         return textResult(await bridgeCall("analytics_config_set", {
           ...base, op: p.op, dryRun: p.dryRun === true, contextsMode: p.contextsMode,
           enabled: p.enabled, targetId: p.targetId, copyFrom: p.copyFrom, fields: p.fields,
           callerOid: p.callerOid, hide: p.hide, stream: p.stream, streamOid: p.streamOid,
-          name: p.name, subType: p.subType, config: p.config,
+          name: p.name, subType: p.subType, acceptDrift: p.acceptDrift === true, settleMs: p.settleMs,
         }));
       case "node_get_xml":
         need(p, ["path"], p.action);
