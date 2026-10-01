@@ -440,7 +440,7 @@ namespace Te1000Daemon
         // shared node Budget (passed as a single-element int[] to emulate the PS
         // [ref] so decrements propagate across recursive calls). Every COM/XML call
         // is guarded; a failure on one node is skipped rather than thrown.
-        private static Json.JArr GetVariableLinksRecursive(dynamic sm, dynamic treeItem, int depth, int maxDepth, HashSet<string> seen, int[] budget)
+        internal static Json.JArr GetVariableLinksRecursive(dynamic sm, dynamic treeItem, int depth, int maxDepth, HashSet<string> seen, int[] budget)
         {
             var links = new Json.JArr();
             if (seen == null) seen = new HashSet<string>(StringComparer.Ordinal);

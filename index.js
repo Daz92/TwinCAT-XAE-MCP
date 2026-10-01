@@ -829,6 +829,21 @@ server.registerTool(
         }
         need(p, ["path", "taskObjectId"], p.action);
         return textResult(await bridgeCall("twincat_module_set_context", { path: p.path, taskObjectId: p.taskObjectId, contextId: p.contextId }));
+      case "reload_tmc":
+        need(p, ["modulePath", "tmcPath", "expectedClassId", "expectedCurrentClassFactoryId", "expectedTargetClassFactoryId"], p.action);
+        return textResult(await bridgeCall("twincat_module_reload_tmc", {
+          modulePath: p.modulePath, tmcPath: p.tmcPath, expectedClassId: p.expectedClassId,
+          expectedCurrentClassFactoryId: p.expectedCurrentClassFactoryId, expectedTargetClassFactoryId: p.expectedTargetClassFactoryId,
+          dryRun: p.dryRun === true,
+        }));
+      case "delete_unlinked":
+        need(p, ["parentPath", "instanceName", "expectedClassId"], p.action);
+        if (p.dryRun !== true && p.confirm !== DELETE_CONFIRMATION) {
+          throw new Error('Blocked. delete_unlinked removes a TcCOM instance. Re-run with dryRun:true to check it, or confirm="' + DELETE_CONFIRMATION + '" to delete.');
+        }
+        return textResult(await bridgeCall("twincat_module_delete_unlinked", {
+          parentPath: p.parentPath, instanceName: p.instanceName, expectedClassId: p.expectedClassId, dryRun: p.dryRun === true,
+        }));
     }
   },
 );

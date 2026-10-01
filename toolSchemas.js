@@ -546,9 +546,11 @@ const toolSchemas = {
       "get_xml (path) — ProduceXml of the instance (Parameters / DataAreas / Symbols, with current CreateSymbol/CreateSymbols flags). set_xml (path, xml, returnXml?) — ConsumeXml escape hatch for parameters not exposed as typed properties. " +
       "enable_symbols (path, parameters?, dataAreas?, returnXml?) — convenience toggle: sets CreateSymbol=true on Parameter nodes and/or CreateSymbols=true on DataArea AreaNo nodes via ProduceXml/ConsumeXml. CAVEAT: the XPath/attribute names are from a how-to summary, NOT verified against a literal ProduceXml dump — call get_xml on a real module first and fall back to set_xml if the toggle reports changed:false. " +
       "To wire module DataArea symbols to PLC/IO/other-module variables (symbols must already exist via enable_symbols), use tc_link link/unlink. " +
-      "set_context (path, taskObjectId, contextId?) — assign the instance to a task's execution context; taskObjectId/contextId are DECIMAL oids (XAE shows hex). GUARDED: changes the activated mapping/runtime context, requires confirm=\"" + MODULE_CONTEXT_CONFIRMATION + "\" and defaults to no-op.",
+      "set_context (path, taskObjectId, contextId?) — assign the instance to a task's execution context; taskObjectId/contextId are DECIMAL oids (XAE shows hex). GUARDED: changes the activated mapping/runtime context, requires confirm=\"" + MODULE_CONTEXT_CONFIRMATION + "\" and defaults to no-op. " +
+      "reload_tmc (modulePath, tmcPath, expectedClassId, expectedCurrentClassFactoryId, expectedTargetClassFactoryId, dryRun?) — offline TcCOM description reload (ConsumeXml <ReloadTmc Path Mode=\"warm\">, saved settings kept): pre-checks the instance ClassID + current ClassFactoryId and that the TMC declares the target vendor|library|version with exactly one Module of that ClassID and the same module name; post-checks path/ClassID/ObjectId unchanged and ClassFactoryId switched to the target, else errors WITHOUT claiming success (the edit is applied but unsaved); reports changes {added,removed,changed} over parameter values, data areas/symbols, contexts and mapping links. Like set_xml it is an unsaved offline edit with no confirm token; dryRun:true runs only the pre-checks. " +
+      "delete_unlinked (parentPath = TIRC^TcCOM Objects or a folder below it, instanceName, expectedClassId, dryRun?) — delete one TcCOM instance only if its ClassID matches and neither it nor any descendant has a variable link (ProduceMappingInfo owners + <LinkedWith> walk); an absent instance returns action:\"absent\". GUARDED: dryRun:true checks only, confirm=\"" + DELETE_CONFIRMATION + "\" to delete.",
     inputSchema: {
-      action: z.enum(["list", "create", "get_xml", "set_xml", "enable_symbols", "set_context"]),
+      action: z.enum(["list", "create", "get_xml", "set_xml", "enable_symbols", "set_context", "reload_tmc", "delete_unlinked"]),
       path: z.string().optional(),
       name: z.string().optional(),
       by: z.enum(["classid", "name"]).optional(),
@@ -560,6 +562,14 @@ const toolSchemas = {
       dataAreas: z.boolean().optional(),
       taskObjectId: z.number().int().optional().describe("decimal ObjectId of the target task (XAE shows it in hex)"),
       contextId: z.number().int().optional(),
+      modulePath: z.string().optional().describe("reload_tmc: TcCOM instance path below TIRC^TcCOM Objects"),
+      tmcPath: z.string().optional().describe("reload_tmc: absolute path (as seen by XAE) of the reviewed .tmc to load"),
+      expectedClassId: z.string().optional().describe("reload_tmc/delete_unlinked: instance ClassID GUID"),
+      expectedCurrentClassFactoryId: z.string().optional().describe("reload_tmc: current vendor|library|version, e.g. Beckhoff Automation GmbH|TcPowerSystems|0.1.5.0"),
+      expectedTargetClassFactoryId: z.string().optional().describe("reload_tmc: vendor|library|version the TMC must switch the instance to"),
+      parentPath: z.string().optional().describe("delete_unlinked: TIRC^TcCOM Objects or a folder below it"),
+      instanceName: z.string().optional().describe("delete_unlinked: direct child name under parentPath"),
+      dryRun: z.boolean().optional().describe("reload_tmc/delete_unlinked: run the checks only, change nothing"),
       confirm: z.string().optional(),
     },
   },
