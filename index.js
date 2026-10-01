@@ -198,8 +198,12 @@ function buildServer() {
 server.registerTool(
   "xae",
   toolSchemas.xae,
-  async ({ action, solutionPath, closeExisting, discardChanges, filter, limit, severityFilter, button, remember, mode }) => {
+  async ({ action, solutionPath, projectPath, closeExisting, discardChanges, filter, limit, severityFilter, button, remember, mode }) => {
     const payload = { mode };
+    if (action === "save_project") {
+      need({ projectPath }, ["projectPath"], action);
+      Object.assign(payload, { projectPath, solutionPath });
+    }
     if (action === "open_solution") {
       need({ solutionPath }, ["solutionPath"], action);
       Object.assign(payload, { solutionPath, visible: true, closeExisting: closeExisting || false, discardChanges: discardChanges === true, mode: mode || "activeOrCreate" });

@@ -9,7 +9,7 @@ namespace Te1000Daemon
     //   xae_execute_command, xae_get_active_document,
     //   xae_get_selected_items, xae_focus_tree_item,
     //   xae_get_error_list, xae_clear_error_list,
-    //   xae_save_all, xae_solution_build.
+    //   xae_save_all, xae_save_project, xae_solution_build.
     internal static class XaeActions
     {
         public static void Register(Dictionary<string, ActionHandler> h)
@@ -24,6 +24,7 @@ namespace Te1000Daemon
             h["xae_get_error_list"] = XaeGetErrorList;
             h["xae_clear_error_list"] = XaeClearErrorList;
             h["xae_save_all"] = XaeSaveAll;
+            h["xae_save_project"] = XaeSaveProject;
             h["xae_solution_build"] = XaeSolutionBuild;
         }
 
@@ -405,6 +406,104 @@ namespace Te1000Daemon
             data["saved"] = true;
             data["solution"] = GetSolutionInfo(dte);
             return data;
+        }
+
+        // xae_save_project: EnvDTE.Project.Save() on exactly one project (e.g. the
+        // System Manager .tsproj) instead of File.SaveAll. projectPath is a full
+        // project file path, or a UniqueName/Name that must match exactly one
+        // project (solution folders are searched). solutionPath, when given, must
+        // be the open solution. Reports the saved file and its on-disk stamp.
+        private static Json.JObj XaeSaveProject(ActionContext ctx)
+        {
+            string wanted = ctx.Require("projectPath");
+            dynamic dte = ctx.Dte(true);
+            string solutionPath = ctx.Payload.Str("solutionPath");
+            string openSolution = ComHelpers.SafeStr(delegate { return dte.Solution.FullName; });
+            if (string.IsNullOrWhiteSpace(openSolution)) throw new BridgeException("No solution is open");
+            if (!string.IsNullOrWhiteSpace(solutionPath) && !SamePath(solutionPath, openSolution))
+                throw new BridgeException("Open solution is '" + openSolution + "', not '" + solutionPath + "' (nothing saved)");
+
+            bool byPath = System.IO.Path.IsPathRooted(wanted);
+            var all = new List<dynamic>();
+            CollectProjects(dte.Solution.Projects, all);
+            var matches = new List<dynamic>();
+            var names = new List<string>();
+            foreach (dynamic p in all)
+            {
+                string full = ComHelpers.SafeStr(delegate { return p.FullName; });
+                string unique = ComHelpers.SafeStr(delegate { return p.UniqueName; });
+                string name = ComHelpers.SafeStr(delegate { return p.Name; });
+                names.Add(unique ?? name);
+                bool hit = byPath
+                    ? !string.IsNullOrEmpty(full) && SamePath(full, wanted)
+                    : string.Equals(unique, wanted, StringComparison.OrdinalIgnoreCase) || string.Equals(name, wanted, StringComparison.OrdinalIgnoreCase);
+                if (hit) matches.Add(p);
+            }
+            if (matches.Count != 1)
+                throw new BridgeException((matches.Count == 0 ? "No" : matches.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)) +
+                    " project(s) match '" + wanted + "' (nothing saved). Projects: " + string.Join(", ", names.ToArray()));
+
+            dynamic project = matches[0];
+            string file = ComHelpers.SafeStr(delegate { return project.FullName; });
+            Json.JObj before = FileStamp(file);
+            try { project.Save(); }
+            catch (Exception ex) { throw new BridgeException("Project.Save failed for '" + file + "': " + ex.Message); }
+
+            var data = new Json.JObj();
+            data["saved"] = true;
+            data["projectName"] = ComHelpers.SafeStr(delegate { return project.Name; });
+            data["uniqueName"] = ComHelpers.SafeStr(delegate { return project.UniqueName; });
+            data["file"] = file;
+            data["before"] = before;
+            data["after"] = FileStamp(file);
+            data["solution"] = openSolution;
+            return data;
+        }
+
+        // Solution.Projects plus projects nested in solution folders.
+        private const string SolutionFolderKind = "{66A26720-8FB5-11D2-AA7E-00C04F688DDE}";
+
+        private static void CollectProjects(dynamic projects, List<dynamic> into)
+        {
+            int count = ComHelpers.SafeInt(delegate { return projects.Count; });
+            for (int i = 1; i <= count; i++)
+            {
+                dynamic p = null;
+                try { p = projects.Item(i); } catch { }
+                if (p != null) AddProject(p, into);
+            }
+        }
+
+        private static void AddProject(dynamic p, List<dynamic> into)
+        {
+            string kind = ComHelpers.SafeStr(delegate { return p.Kind; });
+            if (!string.Equals(kind, SolutionFolderKind, StringComparison.OrdinalIgnoreCase)) { into.Add(p); return; }
+            int n = ComHelpers.SafeInt(delegate { return p.ProjectItems.Count; });
+            for (int j = 1; j <= n; j++)
+            {
+                dynamic sub = null;
+                try { sub = p.ProjectItems.Item(j).SubProject; } catch { }
+                if (sub != null) AddProject(sub, into);
+            }
+        }
+
+        private static bool SamePath(string a, string b)
+        {
+            try { return string.Equals(System.IO.Path.GetFullPath(a), System.IO.Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase); }
+            catch { return string.Equals(a, b, StringComparison.OrdinalIgnoreCase); }
+        }
+
+        private static Json.JObj FileStamp(string file)
+        {
+            var o = new Json.JObj();
+            var fi = new System.IO.FileInfo(file);
+            o["exists"] = fi.Exists;
+            if (fi.Exists)
+            {
+                o["lastWriteUtc"] = fi.LastWriteTimeUtc.ToString("o");
+                o["length"] = fi.Length;
+            }
+            return o;
         }
 
         // xae_solution_build (L5436-5502).

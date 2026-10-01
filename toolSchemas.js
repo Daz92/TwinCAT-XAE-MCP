@@ -69,6 +69,7 @@ const XAE_ACTIONS = {
   status: "xae_status",
   open_solution: "xae_open_solution",
   save_all: "xae_save_all",
+  save_project: "xae_save_project",
   active_document: "xae_get_active_document",
   selected_items: "xae_get_selected_items",
   error_list: "xae_get_error_list",
@@ -82,10 +83,11 @@ const XAE_ACTIONS = {
 // (description + zod inputSchema raw shape) that registerTool consumes. ----------
 const toolSchemas = {
   xae: {
-    description: "XAE shell: status, open_solution (solutionPath; closeExisting:true reopens, discardChanges:true closes the current solution WITHOUT saving before reopening), save_all, active_document, selected_items, error_list (default 50, in Error List order; pass limit to widen, severityFilter:'errors'|'warnings' to filter before the cap — count still reports the true matching total), clear_error_list, list_commands (filter regex, limit), dialog_probe (read-only: is a modal dialog blocking XAE right now? returns its title/text/buttons; never clicks anything), dialog_resolve (button, remember) — click a chosen button on the live modal dialog and optionally remember it in the allowlist; pair with dialog_probe. Destructive prompts (activate/restart/download/safety) are refused for auto-remember (the click still happens once).",
+    description: "XAE shell: status, open_solution (solutionPath; closeExisting:true reopens, discardChanges:true closes the current solution WITHOUT saving before reopening), save_all, save_project (projectPath = full project file path or a UniqueName/Name matching exactly one project, solutionPath? must be the open solution — EnvDTE Project.Save on that one project only, e.g. the System Manager .tsproj, instead of File.SaveAll; refuses when ambiguous; reports the file saved with before/after stamps), active_document, selected_items, error_list (default 50, in Error List order; pass limit to widen, severityFilter:'errors'|'warnings' to filter before the cap — count still reports the true matching total), clear_error_list, list_commands (filter regex, limit), dialog_probe (read-only: is a modal dialog blocking XAE right now? returns its title/text/buttons; never clicks anything), dialog_resolve (button, remember) — click a chosen button on the live modal dialog and optionally remember it in the allowlist; pair with dialog_probe. Destructive prompts (activate/restart/download/safety) are refused for auto-remember (the click still happens once).",
     inputSchema: {
       action: z.enum(Object.keys(XAE_ACTIONS)),
       solutionPath: z.string().optional(),
+      projectPath: z.string().optional().describe("save_project: full project file path, or UniqueName/Name of exactly one project"),
       closeExisting: z.boolean().optional(),
       discardChanges: z.boolean().optional(),
       filter: z.string().optional(),
