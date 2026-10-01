@@ -179,6 +179,16 @@ Two daemon-only meta actions exist (not in the bridge): `ping`,
 | 163 | `xae_solution_build` | yes | `daemon/Actions/XaeActions.cs` |
 | 164 | `xae_status` | yes | `daemon/Actions/XaeActions.cs` |
 
+### Fork additions (daemon-only, no PS bridge case)
+
+| Action | C# location | Source of semantics |
+|---|---|---|
+| `twincat_module_reload_tmc` | `daemon/Actions/ModuleCppActions.cs` | wrapper `reloadTccomTmc` (`xae-configuration.ps1`) |
+| `twincat_module_delete_unlinked` | `daemon/Actions/ModuleCppActions.cs` | wrapper `deleteUnlinkedTccomInstance` |
+| `xae_save_project` | `daemon/Actions/XaeActions.cs` | wrapper `saveSystemManagerProject` |
+
+With these, `ping` reports `actionCount = 167`.
+
 ## Deferred / approximated (none functionally deferred)
 
 All 164 actions are registered and ported. The following carry

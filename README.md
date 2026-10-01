@@ -233,6 +233,23 @@ Point your client at the absolute path of `index.js` in your clone. Example
 
 A ready-to-edit copy lives at [`examples/mcp-config.json`](examples/mcp-config.json).
 
+### Scheduled-task deployment (remote or shared host)
+
+When clients connect over ssh, or several clients share one XAE, run the daemon as an
+interactive-session scheduled task instead of letting each front spawn it (an ssh session
+cannot see XAE in the Running Object Table). From the install directory, as the desktop user:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy\windows\install.ps1 -Pipe te1000 [-SolutionPath <sln>] [-AutoDismiss]
+```
+
+`install.ps1` is idempotent: `npm ci`, daemon build, scheduled task `TE1000-Daemon-<pipe>`
+(Interactive logon, runs `deploy\windows\te1000-daemon-run.ps1`), start, and a ping over the pipe.
+Clients then run `deploy\windows\te1000-mcp-launch.ps1 -Pipe te1000`, which starts the task if
+needed, waits for the pipe and runs the front in the foreground; the front exits when its stdin
+closes, so a closed client or ssh session leaves no `node.exe` behind. Config snippets for
+Claude Code, OpenCode and Codex (ssh and local) are in [`deploy/windows/clients/`](deploy/windows/clients/).
+
 ### Environment variables
 
 All optional. The first group is read by the Node front (`index.js` / `daemonClient.js`);
@@ -313,7 +330,7 @@ Paths into the System Manager tree use `^` separators, e.g.
 
 | Tool | Purpose | Key actions |
 |---|---|---|
-| `xae` | XAE shell & solution control | `status`, `open_solution`, `save_all`, `active_document`, `selected_items`, `error_list`, `clear_error_list`, `list_commands` |
+| `xae` | XAE shell & solution control | `status`, `open_solution`, `save_all`, `save_project`, `active_document`, `selected_items`, `error_list`, `clear_error_list`, `list_commands` |
 | `xae_build` | Compile the active configuration | `clean`, `build`, `rebuild` |
 | `xae_command` | Run a raw DTE command 🔒 | any command name (guarded) |
 
@@ -346,7 +363,7 @@ Paths into the System Manager tree use `^` separators, e.g.
 | `tc_route` | ADS routes | `list`, `broadcast_search`, `search_host`, `add_route` 🔒, `add_project_route` 🔒 |
 | `tc_settings` | Engineering settings & archives | `get/set_silent_mode`, `get/set_target_platform`, `save_solution_archive`, `save_plc_archive`, `get/set_independent_file`, `get/set_disabled` |
 | `tc_fieldbus` | Non-EtherCAT fieldbuses (PROFINET/PROFIBUS/CANopen/DeviceNet/EAP) | `create_device`, `create_gsd_box`, `add_netvar`, `set_station_address`, `import_dbc`, `get/set_xml` |
-| `tc_module` | TcCOM module objects | `list`, `create`, `get/set_xml`, `enable_symbols`, `set_context` 🔒 |
+| `tc_module` | TcCOM module objects | `list`, `create`, `get/set_xml`, `enable_symbols`, `set_context` 🔒, `reload_tmc`, `delete_unlinked` 🔒 |
 | `tc_cpp` | TwinCAT C++ projects/modules | `create_project`, `create_module`, `tmc_codegen`, `set_props`, `build`, `publish` 🔒 |
 | `tc_measurement` | Scope + Analytics (TIAN) | `scope_create`, `scope_record` 🔒, `analytics_create`, `logger_create`, `stream_create`, … |
 | `tc_license` | TwinCAT licensing | `list`, `add`, `activate_response` 🔒 |
