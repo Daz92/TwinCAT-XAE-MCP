@@ -2,7 +2,12 @@
 # Run it from the checkout/install directory, in the interactive user session or
 # over ssh as that same user:
 #
-#   powershell -ExecutionPolicy Bypass -File <install>\deploy\windows\install.ps1 [-Pipe te1000] [-SolutionPath <sln>] [-AutoDismiss]
+#   powershell -ExecutionPolicy Bypass -File <install>\deploy\windows\install.ps1 [-Pipe te1000] [-SolutionPath <sln>] [-AutoDismiss] [-RunLevel Limited|Highest] [-Force]
+#
+# -RunLevel Highest runs the daemon elevated; use it only when XAE itself runs
+# elevated (COM does not attach across integrity levels). Default Limited.
+# If TE1000-Daemon-<Pipe> already exists but runs another install's run script,
+# the install refuses (it would take over that install's pipe) unless -Force.
 #
 # Steps: npm ci, build the daemon, register/refresh the scheduled task
 # "TE1000-Daemon-<Pipe>" (Interactive logon for the current user, runs
@@ -13,7 +18,9 @@
 param(
     [string]$Pipe = 'te1000',
     [string]$SolutionPath,
-    [switch]$AutoDismiss
+    [switch]$AutoDismiss,
+    [ValidateSet('Limited', 'Highest')][string]$RunLevel = 'Limited',
+    [switch]$Force
 )
 $ErrorActionPreference = 'Stop'
 $installDir = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -29,10 +36,17 @@ if (-not (Test-Path -LiteralPath $nodeExe)) { throw "node.exe not found (install
 Write-Host "Install dir: $installDir"
 Write-Host "Task:        $taskName (pipe $Pipe)"
 
-# 1. Stop this pipe's daemon so the exe can be rebuilt.
-if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
-    Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+# 0. An existing task of this name must belong to this install.
+$existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+if ($existing -and -not $Force) {
+    $foreign = @($existing.Actions | Where-Object { "$($_.Arguments)".IndexOf($runScript, [StringComparison]::OrdinalIgnoreCase) -lt 0 })
+    if ($foreign.Count -gt 0) {
+        throw "Task '$taskName' already exists and runs '$($foreign[0].Execute) $($foreign[0].Arguments)', not $runScript. Nothing changed; use another -Pipe, or -Force to take it over."
+    }
 }
+
+# 1. Stop this pipe's daemon so the exe can be rebuilt.
+if ($existing) { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue }
 Get-CimInstance Win32_Process -Filter "Name = 'Te1000Daemon.exe'" |
     Where-Object { $_.ExecutablePath -eq $exe -and $_.CommandLine -match "--pipe\s+`"?$([regex]::Escape($Pipe))`"?(\s|$)" } |
     ForEach-Object { Write-Host "Stopping daemon PID $($_.ProcessId)"; Stop-Process -Id $_.ProcessId -Force }
@@ -54,7 +68,7 @@ $taskArgs = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hid
 if ($SolutionPath) { $taskArgs += " -SolutionPath `"$SolutionPath`"" }
 if ($AutoDismiss) { $taskArgs += ' -AutoDismiss' }
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $taskArgs
-$principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive
+$principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel $RunLevel
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal -Settings $settings -Force | Out-Null
 Start-ScheduledTask -TaskName $taskName

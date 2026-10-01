@@ -243,12 +243,16 @@ cannot see XAE in the Running Object Table). From the install directory, as the 
 powershell -ExecutionPolicy Bypass -File deploy\windows\install.ps1 -Pipe te1000 [-SolutionPath <sln>] [-AutoDismiss]
 ```
 
-`install.ps1` is idempotent: `npm ci`, daemon build, scheduled task `TE1000-Daemon-<pipe>`
+`install.ps1` is idempotent (`-RunLevel Highest` when XAE runs elevated; it refuses to take over
+an existing `TE1000-Daemon-<pipe>` task that runs another install unless `-Force`): `npm ci`, daemon build, scheduled task `TE1000-Daemon-<pipe>`
 (Interactive logon, runs `deploy\windows\te1000-daemon-run.ps1`), start, and a ping over the pipe.
 Clients then run `deploy\windows\te1000-mcp-launch.ps1 -Pipe te1000`, which starts the task if
 needed, waits for the pipe and runs the front in the foreground; the front exits when its stdin
 closes, so a closed client or ssh session leaves no `node.exe` behind. Config snippets for
 Claude Code, OpenCode and Codex (ssh and local) are in [`deploy/windows/clients/`](deploy/windows/clients/).
+Every snippet names the server `te1000`: client-side guards (hooks or permission rules
+matching `mcp__te1000__*`) only cover a server with that exact name, so do
+not register it as `te1000-local` or similar.
 
 ### Environment variables
 

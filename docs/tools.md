@@ -65,7 +65,9 @@ XAE shell and solution control.
   instead of File.SaveAll. `projectPath` is a full project file path or a `UniqueName`/`Name`
   matching exactly one project (solution folders included); zero or several matches refuse and
   list the projects. `solutionPath`, when given, must be the open solution. Reports the saved
-  `file` with before/after on-disk stamps.
+  `file` with before/after on-disk stamps; `saved` is true only if the file changed on disk
+  (otherwise `saved: false, unchanged: true`). Nested projects reachable through `ProjectItems`
+  are searched too.
 - `list_commands` (`filter` regex, `limit`) — discover available DTE command names.
 
 ### `xae_build`
@@ -281,7 +283,8 @@ TcCOM module objects: `list`, `create`, `get_xml`, `set_xml`, `enable_symbols`,
   declares the target `vendor|library|version` and exactly one `Module` with that ClassID, the same
   module name and `CLSID@ClassFactory` = library. Post-checks: path, ClassID and ObjectId unchanged
   and ClassFactoryId switched to the target — otherwise it errors without claiming success (the
-  reload is applied but unsaved). The result lists `changes {added, removed, changed}` over
+  reload is applied but unsaved); a removed mapping link (`linksLost > 0`) is such a failure too.
+  The result lists `changes {added, removed, changed}` over
   parameter values, data areas/symbols, contexts and mapping links. Like `set_xml` this is an
   unsaved offline config edit, so no confirm token; `dryRun: true` runs only the pre-checks.
 - `delete_unlinked` 🔒 `ALLOW_TWINCAT_DELETE` (`parentPath`, `instanceName`, `expectedClassId`,

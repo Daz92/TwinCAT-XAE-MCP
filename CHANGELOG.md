@@ -28,9 +28,20 @@ All notable changes to this project are documented here. The format is based on
   instances their data areas).
 - Tree-lookup errors name the requested path instead of XAE's garbled text
   (`Item '䥔乁䅞...' not found` → `Tree item not found: TIAN^ANALYTICS (0x98510001)`); other COM
-  error text with that narrow-into-wide quoting is repaired before it is returned.
+  error text with that narrow-into-wide quoting is repaired before it is returned. Only XAE's
+  not-found HRESULT (0x98510001) is rewritten; other COM errors (e.g. RPC_E_DISCONNECTED)
+  propagate unchanged, and `delete_unlinked` reports `absent` only for a real not-found.
 - The Node front exits when its stdin closes (or on SIGHUP/SIGTERM/SIGINT) instead of lingering
-  on the daemon pipe after its client is gone.
+  on the daemon pipe after its client is gone; in-flight daemon calls and stdout are drained first.
+- `tc_module create` accepts the `<name> (<ModuleTypeName>)` name XAE gives a TcCOM instance
+  instead of deleting it as a ghost, and returns the real child path.
+- `tc_module list` indexes `ITcModuleManager3.Modules`; the manager enumerator failed with
+  `DISP_E_MEMBERNOTFOUND` through the embedded interop.
+- `tc_module reload_tmc` treats a lost mapping link as a failed reload (`linksLost`).
+- `xae save_project` searches nested projects, fails on an unreadable `Projects.Item`, and
+  reports `saved: false, unchanged: true` when the file did not change on disk.
+- `install.ps1` refuses to take over an existing task that runs another install (`-Force`
+  overrides) and takes `-RunLevel Limited|Highest`. Client snippets all name the server `te1000`.
 
 ## [2.4.0] — 2026-08-12
 

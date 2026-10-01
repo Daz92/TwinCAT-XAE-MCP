@@ -1,4 +1,5 @@
 # Codex: merge into ~/.codex/config.toml. Replace <host> and <user>.
+# Always name the server "te1000": tool guards match that name only.
 # TOML literal strings ('...') keep the Windows backslashes as written.
 
 # Remote Windows host over ssh.

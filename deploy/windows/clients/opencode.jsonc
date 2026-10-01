@@ -1,5 +1,6 @@
 // OpenCode: merge into opencode.jsonc (project) or ~/.config/opencode/opencode.jsonc.
-// Replace <host> and <user>. Keep exactly one of the two entries enabled.
+// Replace <host> and <user>. Always name the server "te1000": tool guards match
+// that name only. The local variant differs only in "command".
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
@@ -13,16 +14,16 @@
         "-Pipe", "te1000"
       ],
       "enabled": true
-    },
-    // OpenCode running on the Windows host itself.
-    "te1000-local": {
-      "type": "local",
-      "command": [
-        "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-        "-File", "C:\\Users\\<user>\\AppData\\Local\\TwinCAT-XAE-MCP\\deploy\\windows\\te1000-mcp-launch.ps1",
-        "-Pipe", "te1000"
-      ],
-      "enabled": false
     }
+    // OpenCode running on the Windows host itself - use this "te1000" instead:
+    // "te1000": {
+    //   "type": "local",
+    //   "command": [
+    //     "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+    //     "-File", "C:\\Users\\<user>\\AppData\\Local\\TwinCAT-XAE-MCP\\deploy\\windows\\te1000-mcp-launch.ps1",
+    //     "-Pipe", "te1000"
+    //   ],
+    //   "enabled": true
+    // }
   }
 }
