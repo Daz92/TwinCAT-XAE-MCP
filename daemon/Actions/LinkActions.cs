@@ -482,12 +482,9 @@ namespace Te1000Daemon
 
             // Recurse into standard children.
             var childNames = new HashSet<string>(StringComparer.Ordinal);
-            int count = ComHelpers.ChildCount(treeItem);
-            for (int i = 1; i <= count; i++)
+            foreach (dynamic child in ComHelpers.Children(treeItem))
             {
                 if (budget != null && budget[0] <= 0) break;
-                dynamic child = ComHelpers.Child(treeItem, i);
-                if (child == null) continue;
                 string cn = ComHelpers.SafeStr(delegate { return child.Name; });
                 if (!string.IsNullOrWhiteSpace(cn)) childNames.Add(cn);
                 Json.JArr childLinks = GetVariableLinksRecursive(sm, child, depth + 1, maxDepth, seen, budget);

@@ -64,11 +64,41 @@ namespace Te1000Daemon
         }
 
         // Get-TreeItem (L3039-3047): LookupTreeItem; throw if not found.
+        // XAE's own LookupTreeItem failure text formats the narrow path into a wide
+        // string ("Item '䥔乁䅞...' not found"), so it is replaced with the path we
+        // sent. Retryable COM errors still propagate unchanged.
         public static dynamic GetTreeItem(dynamic sysManager, string treePath)
         {
-            dynamic item = sysManager.LookupTreeItem(treePath);
+            dynamic item;
+            try { item = sysManager.LookupTreeItem(treePath); }
+            catch (Exception ex)
+            {
+                if (IsRetryableComError(ex)) throw;
+                throw new BridgeException("Tree item not found: " + treePath + " (" + ErrorCode(ex) + ")");
+            }
             if (item == null) throw new BridgeException("Tree item not found: " + treePath);
             return item;
+        }
+
+        // Undo XAE's narrow-into-wide formatting in COM error text: a quoted run
+        // whose every UTF-16 unit packs two printable ASCII bytes (low byte first;
+        // an odd-length path ends in one plain ASCII char) is decoded back.
+        // "'䥔乁䅞䅎奌䥔千'" -> "'TIAN^ANALYTICS'". Anything else is left as is.
+        public static string RepairPackedAscii(string message)
+        {
+            if (string.IsNullOrEmpty(message)) return message;
+            return Regex.Replace(message, "'([^'\\x00-\\xFF]{1,512})([\\x20-\\x7E]?)'", delegate(Match m)
+            {
+                string run = m.Groups[1].Value;
+                var sb = new System.Text.StringBuilder(run.Length * 2 + 1);
+                foreach (char c in run)
+                {
+                    int lo = c & 0xFF, hi = c >> 8;
+                    if (lo < 0x20 || lo > 0x7E || hi < 0x20 || hi > 0x7E) return m.Value;
+                    sb.Append((char)lo).Append((char)hi);
+                }
+                return "'" + sb.ToString() + m.Groups[2].Value + "'";
+            });
         }
 
         public static dynamic TryGetTreeItem(dynamic sysManager, string treePath)
@@ -85,6 +115,37 @@ namespace Te1000Daemon
         public static dynamic Child(dynamic treeItem, int index)
         {
             try { return treeItem.Child(index); } catch { return null; }
+        }
+
+        // Direct children of a tree item. XAE reports ChildCount 0 for some nodes
+        // that do have children (e.g. a PLC "<proj> Instance" whose "PlcTask
+        // Inputs" resolves by path), so a 0 count is not trusted: the COM
+        // enumerator is walked instead, and if that throws, Child(i) is probed
+        // until it fails.
+        public static List<dynamic> Children(dynamic treeItem)
+        {
+            var list = new List<dynamic>();
+            int count = ChildCount(treeItem);
+            for (int i = 1; i <= count; i++)
+            {
+                dynamic c = Child(treeItem, i);
+                if (c != null) list.Add(c);
+            }
+            if (count > 0) return list;
+            try
+            {
+                foreach (object c in (System.Collections.IEnumerable)treeItem)
+                    if (c != null) list.Add(c);
+                return list;
+            }
+            catch { list.Clear(); }
+            for (int i = 1; i <= 100000; i++)
+            {
+                dynamic c = Child(treeItem, i);
+                if (c == null) break;
+                list.Add(c);
+            }
+            return list;
         }
 
         // ConsumeXml with GetLastXmlError surfacing (used by many set_xml handlers).
@@ -117,7 +178,8 @@ namespace Te1000Daemon
             o["pathName"] = SafeStr(() => treeItem.PathName);
             o["itemType"] = SafeIntObj(() => treeItem.ItemType);
             o["subType"] = subType == null ? null : (object)ToInt(subType);
-            o["childCount"] = ChildCount(treeItem);
+            int childCount = ChildCount(treeItem);
+            o["childCount"] = childCount > 0 ? childCount : Children(treeItem).Count;
             return o;
         }
 

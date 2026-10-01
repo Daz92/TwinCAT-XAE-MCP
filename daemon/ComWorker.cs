@@ -98,14 +98,14 @@ namespace Te1000Daemon
                 catch (BridgeException bex)
                 {
                     res.Ok = false;
-                    res.Error = bex.Message;
+                    res.Error = ComHelpers.RepairPackedAscii(bex.Message);
                     res.Kind = bex.Kind;
                     res.Dialog = bex.Dialog;
                 }
                 catch (Exception ex)
                 {
                     res.Ok = false;
-                    res.Error = ex.Message;
+                    res.Error = ComHelpers.RepairPackedAscii(ex.Message);
                     res.Kind = ErrorKind.ComError;
                 }
                 item.Result = res;
