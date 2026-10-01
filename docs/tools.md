@@ -274,8 +274,17 @@ TwinCAT C++ projects/modules: `create_project`, `create_module`, `open`, `tmc_co
 ### `tc_measurement`
 Scope + Analytics (`TIAN`): `scope_create`, `scope_add_child`, `scope_rename`,
 `scope_record` 🔒 `ALLOW_MEASUREMENT_RECORD`, `analytics_create`, `logger_create`,
-`logger_delete` 🔒, `stream_create`, `stream_delete` 🔒. For raw `ProduceXml`/`ConsumeXml`
-on a logger/stream node, use `tc_tree get_xml`/`set_xml`.
+`logger_delete` 🔒, `stream_create`, `stream_delete` 🔒, `analytics_get`, `analytics_set`.
+
+`analytics_get` returns the native `TIAN` configuration with MQTT secrets redacted.
+`analytics_set` takes an `op`: `logger_enable`, `target_add` (`copyFrom` clones a
+target's encrypted credentials), `target_edit`, `target_remove` 🔒, `context_hide`,
+`stream_edit`, `stream_add` (experimental), `stream_remove` 🔒. Each write re-reads the
+full XML and changes only the requested fields. Pass `dryRun:true` to see `plannedDiff`;
+after a write, check `verified` and `notAsPlanned`. Do not use `tc_tree set_xml` on
+`TIAN`: a partial `ConsumeXml` replaces the whole `Config`, and echoing
+`StreamContexts` re-selects every source. `logger_create` is refused on the native
+model, which has no DataLogger objects.
 
 ### `tc_license`
 TwinCAT licensing on `TIRC^License`: `list`, `add`, `activate_response` 🔒 `ALLOW_LICENSE_ACTIVATE`.

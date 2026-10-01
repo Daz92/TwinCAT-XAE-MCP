@@ -310,6 +310,17 @@ start/stop analysis). Project creation via `AddFromTemplate` is verified; the
 network/function method names are **unverified** (same caveat as 11.1).
 
 ### 11.3 Analytics Logger & Stream Helper (`12562699019`)
+
+> **Native model (live-probed 2026-10-01).** On current TF3500 the `TIAN` node
+> (ItemType 100) is a single `AnalyticsConfig`: `Config{StreamTargets, ActivateAlyLogger}`
+> plus `StreamContexts/StreamContext[AdiOid,CallerOid,Category,Hide]{ItemName}`, one per
+> PLC task image. `ChildCount` is 0. Item types 101 (logger) / 102 (stream) / 103 (context)
+> exist in `TREEITEMTYPES`, but `LookupTreeItemById(101..103, id)` throws "unknown or not
+> usable". `LookupTreeItemById(0, streamOid)` resolves a stream (its OID is listed in
+> `TIAN` `AdiOids`), whose `ProduceXml` holds `AnalyticsStream > Config`, and whose
+> `Parent` is the context item (103). `Hide` is the *Stream Sources* checkbox. The
+> DataLogger/StreamHelper pages below describe the legacy model:
+> `CreateChild(name, 1)` returns null on the native model.
 System-manager route on `TIAN`:
 - Create/delete DataLogger (`12562942987`) and StreamHelper (`12563004555`) via
   `CreateChild`/`DeleteChild` (StreamHelper delete name gets `_Obj1 (StreamHelper)`

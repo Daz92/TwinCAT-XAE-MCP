@@ -4,6 +4,29 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased (fork)
+
+### Added
+- **`tc_measurement analytics_get`** — redacted read of the native TwinCAT Analytics
+  configuration (`TIAN` `AnalyticsConfig`): `ActivateAlyLogger`, stream targets (MQTT
+  broker/user/certificate/crypted fields → `"<redacted>"`), stream contexts
+  (`callerOid`, `itemName`, `hide`) and their streams (OID, name, key `Config` fields,
+  symbol count). Streams are hidden from `LookupTreeItem` and child enumeration; they are
+  found through `TIAN` `AdiOids` + `LookupTreeItemById(0, oid)` (ItemType 102).
+- **`tc_measurement analytics_set`** — `op` = `logger_enable`, `target_add` / `target_edit` /
+  `target_remove`, `context_hide`, `stream_edit`, `stream_add` (experimental) /
+  `stream_remove`. Full-XML read-modify-write inside the daemon (credentials never leave
+  it), `dryRun` plan, and a redacted before/after diff plus `notAsPlanned` / `verified`
+  after every write. `target_remove` / `stream_remove` are delete-guarded. TIAN writes
+  drop `StreamContexts` by default (`contextsMode: omit`), because echoing them
+  re-selects every source (`Hide` true → false). Write paths are not yet verified live.
+
+### Fixed
+- `logger_create` on the native model now fails with a clear message instead of a
+  `CreateChild returned null` ghost error (DataLogger objects do not exist there).
+- `stream_create` accepts the live StreamHelper name `<name> (StreamHelper)` as well as
+  the documented `<name>_Obj1 (StreamHelper)`; `stream_delete` tries both.
+
 ## [2.4.0] — 2026-08-12
 
 MCP protocol upgrade: the server now speaks the **2026-07-28 stateless protocol
