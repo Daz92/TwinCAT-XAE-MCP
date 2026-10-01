@@ -548,7 +548,9 @@ server.registerTool(
       case "check_objects":
         return textResult(await bridgeCall("plc_pou_check_objects", { plcPath: p.plcPath }));
       case "replace":
-        need(p, ["path", "find", "replaceWith"], p.action);
+        need(p, ["path", "find"], p.action);
+        // "" is a legal replaceWith (deletes the match); only absence is an error.
+        if (typeof p.replaceWith !== "string") throw new Error("'replaceWith' is required for action=replace (\"\" deletes the match)");
         return textResult(await bridgeCall("plc_pou_replace", {
           path: p.path, target: p.target, find: p.find, replaceWith: p.replaceWith,
           expectCount: p.expectCount, validate: p.validate === true, save: p.save === true,
