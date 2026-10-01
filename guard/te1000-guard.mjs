@@ -11,12 +11,13 @@
 // Input: the hook JSON on stdin ({tool_name, tool_input, cwd, session_id}).
 // Output: a PreToolUse decision on stdout, or nothing to let the call through.
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, openSync, closeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-const PREFIX = /^mcp__te1000__/;
+// Any MCP server whose name contains "te1000" (te1000, te1000-local, my-te1000, ...).
+const PREFIX = /^mcp__[A-Za-z0-9-]*te1000[A-Za-z0-9-]*__/i;
 
 // Tools whose every action touches the target runtime or is an unconstrained escape hatch.
 const RUNTIME_TOOLS = new Set([
@@ -34,6 +35,15 @@ const RUNTIME_ACTIONS = {
   tc_route: ["add_route", "add_project_route"],
   tc_cpp: ["publish"],
   tc_measurement: ["scope_record"],
+  // ScanIoBoxes talks to the live EtherCAT master on the target.
+  tc_system: ["scan_io_boxes"],
+};
+
+// Actions that need the user's yes every time: dialog_resolve clicks a button on whatever
+// modal XAE shows (including activate/restart prompts); set_netid changes the activation target.
+const ASK_ACTIONS = {
+  xae: ["dialog_resolve"],
+  tc_system: ["set_netid"],
 };
 
 const DELETE_TOKEN = "ALLOW_TWINCAT_DELETE";
@@ -108,6 +118,8 @@ export function decide(input, { lockFile, now = Date.now() } = {}) {
   let result = { decision: "allow" };
   if (confirm === DELETE_TOKEN) {
     result = { decision: "ask", reason: "te1000 guard: this call deletes XAE configuration; confirm with the user." };
+  } else if (ASK_ACTIONS[tool]?.includes(action)) {
+    result = { decision: "ask", reason: `te1000 guard: ${tool} ${action} can affect what reaches the target; confirm with the user.` };
   }
   if (found && result.decision === "allow") {
     for (const rule of found.policy.ask ?? []) {
@@ -119,19 +131,46 @@ export function decide(input, { lockFile, now = Date.now() } = {}) {
   }
 
   if (isWrite(tool, action) && lockFile) {
+    const me = input.session_id;
+    if (!me) {
+      return { decision: "deny", reason: "te1000 guard: no session id in the hook input, so the write lock cannot tell agents apart." };
+    }
     const held = readLock(lockFile);
-    const me = input.session_id ?? "unknown";
     if (held && held.session !== me && now - held.at < LOCK_TTL_MS) {
       const ageS = Math.round((now - held.at) / 1000);
       return { decision: "deny", reason: `te1000 guard: another agent session (${held.session}) wrote to XAE ${ageS} s ago and holds the write lock (${lockFile}). Wait, or ask the user to clear it.` };
     }
-    writeLock(lockFile, { session: me, at: now, tool, action: action ?? null });
+    // Take or refresh the lock only for a call that will run now; an "ask" may be refused.
+    if (result.decision === "allow") {
+      const value = { session: me, at: now, tool, action: action ?? null };
+      if (!held && !createLock(lockFile, value)) {
+        const winner = readLock(lockFile);
+        if (winner && winner.session !== me) {
+          return { decision: "deny", reason: `te1000 guard: another agent session (${winner.session}) took the XAE write lock at the same moment (${lockFile}).` };
+        }
+      }
+      writeLock(lockFile, value);
+    }
   }
   return result;
 }
 
 function readLock(file) {
   try { return JSON.parse(readFileSync(file, "utf8")); } catch { return null; }
+}
+
+// Atomic create: false when another process created the file first.
+function createLock(file, value) {
+  mkdirSync(dirname(file), { recursive: true });
+  try {
+    const fd = openSync(file, "wx");
+    writeFileSync(fd, JSON.stringify(value));
+    closeSync(fd);
+    return true;
+  } catch (err) {
+    if (err.code === "EEXIST") return false;
+    throw err;
+  }
 }
 
 function writeLock(file, value) {
@@ -143,8 +182,15 @@ export const defaultLockFile = () =>
   process.env.TE1000_GUARD_LOCK ?? join(homedir(), ".cache", "te1000", "write.lock");
 
 function main() {
-  const input = JSON.parse(readFileSync(0, "utf8") || "{}");
-  const { decision, reason } = decide(input, { lockFile: defaultLockFile() });
+  let decision, reason;
+  try {
+    const input = JSON.parse(readFileSync(0, "utf8") || "{}");
+    ({ decision, reason } = decide(input, { lockFile: defaultLockFile() }));
+  } catch (err) {
+    // Fail closed: an unreadable policy, lock or input must not let a call through.
+    decision = "deny";
+    reason = `te1000 guard failed, so the call is blocked: ${err.message}`;
+  }
   if (decision === "allow") return;
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {

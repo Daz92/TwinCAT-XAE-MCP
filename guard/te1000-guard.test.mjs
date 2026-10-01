@@ -61,6 +61,37 @@ test("write lock blocks a second session and expires", () => {
   assert.equal(write("B", 2000 + 10 * 60 * 1000 + 1).decision, "allow");
 });
 
+test("servers with te1000 in their name are guarded too", () => {
+  const d = decide({ tool_name: "mcp__te1000-local__twincat_activate_configuration", tool_input: {}, cwd: tmp() });
+  assert.equal(d.decision, "deny");
+  assert.equal(decide({ tool_name: "mcp__other__plc_download", tool_input: {} }).decision, "allow");
+});
+
+test("dialog_resolve and set_netid ask, scan_io_boxes is denied", () => {
+  assert.equal(decide(call("xae", { action: "dialog_resolve", button: "Yes" })).decision, "ask");
+  assert.equal(decide(call("tc_system", { action: "set_netid", netId: "1.2.3.4.1.1" })).decision, "ask");
+  assert.equal(decide(call("tc_system", { action: "scan_io_boxes" })).decision, "deny");
+});
+
+test("an ask does not take the write lock; a missing session id is denied", () => {
+  const lockFile = join(tmp(), "write.lock");
+  assert.equal(decide(call("xae", { action: "dialog_resolve" }, { session: "A" }), { lockFile, now: 0 }).decision, "ask");
+  assert.equal(decide(call("plc_pou", { action: "replace" }, { session: "B" }), { lockFile, now: 1 }).decision, "allow");
+  const noSession = { tool_name: "mcp__te1000__plc_pou", tool_input: { action: "replace" }, cwd: tmp() };
+  assert.equal(decide(noSession, { lockFile: join(tmp(), "w.lock") }).decision, "deny");
+});
+
+test("the hook fails closed on a broken policy file", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const root = tmp();
+  writeFileSync(join(root, ".te1000-policy.json"), "{ not json");
+  const input = JSON.stringify({ tool_name: "mcp__te1000__plc_pou", tool_input: { action: "get_decl" }, cwd: root, session_id: "x" });
+  const r = spawnSync(process.execPath, [new URL("./te1000-guard.mjs", import.meta.url).pathname],
+    { input, encoding: "utf8", env: { ...process.env, TE1000_GUARD_LOCK: join(tmp(), "l.lock") } });
+  assert.equal(r.status, 0);
+  assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "deny");
+});
+
 test("builds count as writes", () => {
   const lockFile = join(tmp(), "write.lock");
   decide(call("xae_build", { action: "build" }, { session: "A" }), { lockFile, now: 0 });

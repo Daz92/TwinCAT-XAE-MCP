@@ -11,12 +11,18 @@ that boundary deterministic. It needs only Node 20+ and has no dependencies.
 | `twincat_activate_configuration`, `twincat_restart_runtime`, `plc_download`, `xae_command` | deny |
 | `plc_project online` / `generate_boot_project`, `plc_session logout`, `tc_license activate_response`, `tc_route add_route` / `add_project_route`, `tc_cpp publish`, `tc_measurement scope_record` with `state: "start"` | deny |
 | any call whose `confirm` is a token other than `ALLOW_TWINCAT_DELETE` | deny |
+| `tc_system scan_io_boxes` (talks to the live EtherCAT master) | deny |
 | a call with `confirm: "ALLOW_TWINCAT_DELETE"` | ask the user |
+| `xae dialog_resolve` (clicks a button on whatever XAE dialog is open), `tc_system set_netid` | ask the user |
 | a rule in the repository's `.te1000-policy.json` | deny or ask, as the rule says |
 | any engineering write while another agent session wrote in the last 10 minutes | deny (write lock) |
 | everything else | allow |
 
-**Write lock.** Every te1000 call that is not a read records the calling session in
+The guard applies to every MCP server whose name contains `te1000` (`te1000`, `te1000-local`,
+...). If the guard itself fails (unreadable policy file, lock directory, input), it denies the
+call rather than letting it through.
+
+**Write lock.** Every allowed te1000 call that is not a read records the calling session in
 `~/.cache/te1000/write.lock` (override with `TE1000_GUARD_LOCK`). A write from a different
 session within 10 minutes is denied with the holder's session id. Reads never take the lock.
 The lock only covers Claude Code sessions on the same host; other clients (OpenCode, Codex)
@@ -31,7 +37,7 @@ Add to `~/.claude/settings.json` (user scope, so every repository gets it):
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "mcp__te1000__.*",
+        "matcher": "mcp__.*te1000.*__.*",
         "hooks": [{ "type": "command", "command": "node /path/to/TwinCAT-XAE-MCP/guard/te1000-guard.mjs" }]
       }
     ]
