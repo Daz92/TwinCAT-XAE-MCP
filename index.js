@@ -1012,7 +1012,17 @@ function main() {
   // The daemon pipe socket keeps the event loop alive, so a client that goes
   // away (ssh session closed, stdin EOF/broken) would otherwise leave this
   // front running forever. The daemon itself is a separate process and stays.
-  const quit = () => process.exit(0);
+  // In-flight daemon calls are let finish (the daemon would complete them
+  // anyway) and stdout is flushed before exiting; a broken stdout just exits.
+  let quitting = false;
+  const quit = () => {
+    if (quitting) return;
+    quitting = true;
+    const flush = () => process.stdout.write("", () => process.exit(0));
+    const wait = () => (daemonClient.pendingCount() === 0 ? setTimeout(flush, 100) : setTimeout(wait, 200));
+    wait();
+  };
+  process.stdout.on("error", () => process.exit(0));
   for (const ev of ["end", "close", "error"]) process.stdin.on(ev, quit);
   for (const sig of ["SIGHUP", "SIGTERM", "SIGINT"]) process.on(sig, quit);
   console.error("te1000-mcp server running on stdio (native daemon mode; MCP 2026-07-28 stateless + legacy initialize)");
