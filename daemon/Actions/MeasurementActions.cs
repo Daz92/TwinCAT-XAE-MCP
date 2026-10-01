@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Globalization;
 using System.Linq;
 using System.Reflection;
+using System.Xml;
 
 namespace Te1000Daemon
 {
@@ -35,6 +37,8 @@ namespace Te1000Daemon
             h["analytics_stream_create"] = AnalyticsStreamCreate;
             h["analytics_logger_delete"] = AnalyticsLoggerDelete;
             h["analytics_stream_delete"] = AnalyticsStreamDelete;
+            h["analytics_config_get"] = AnalyticsConfigGet;
+            h["analytics_config_set"] = AnalyticsConfigSet;
         }
 
         // --- measurement_scope_create (L9330-9356) ---------------------------
@@ -215,9 +219,17 @@ namespace Te1000Daemon
 
             dynamic sm = ctx.SysManager();
             dynamic tian = ComHelpers.GetTreeItem(sm, "TIAN");
+            // Native model (TIAN ProduceXml carries AnalyticsConfig): there are no
+            // DataLogger objects — item type 101 is "unknown or not usable" and
+            // CreateChild(name,1) returns null (live, 2026-10-01). Refuse up front.
+            if (IsNativeAnalytics(tian))
+            {
+                throw new BridgeException("TIAN uses the native Analytics configuration (AnalyticsConfig): DataLogger objects do not exist in this TwinCAT version, so CreateChild(name,1) returns null. " +
+                    "The logger is the ActivateAlyLogger flag plus stream targets/streams: use tc_measurement analytics_set op=logger_enable / target_add / stream_add instead.");
+            }
             // subType 1 = DataLogger (infosys 12562942987).
             dynamic child = tian.CreateChild(name, 1, before, null);
-            AssertWellFormedChild(tian, child, name, 1, "TIAN");
+            AssertWellFormedChild(tian, child, name, 1, "TIAN", new string[] { name });
 
             ctx.Cache.Invalidate("TIAN");
 
@@ -236,9 +248,12 @@ namespace Te1000Daemon
 
             dynamic sm = ctx.SysManager();
             dynamic tian = ComHelpers.GetTreeItem(sm, "TIAN");
-            // subType 0 = StreamHelper (infosys 12563004555).
+            // subType 0 = StreamHelper (infosys 12563004555). Infosys says the node is
+            // '<name>_Obj1 (StreamHelper)'; live XAE names it '<name> (StreamHelper)'.
+            // Accept either. This is the legacy StreamHelper object, NOT a native
+            // Analytics stream (those live under a stream context: analytics_set stream_add).
             dynamic child = tian.CreateChild(name, 0, before, null);
-            AssertWellFormedChild(tian, child, name, 0, "TIAN");
+            AssertWellFormedChild(tian, child, name, 0, "TIAN", StreamHelperNames(name));
 
             ctx.Cache.Invalidate("TIAN");
 
@@ -285,26 +300,42 @@ namespace Te1000Daemon
         {
             string name = ctx.Payload.Str("name");
             if (string.IsNullOrWhiteSpace(name)) throw new BridgeException("name is required");
-            string deleteName = name + "_Obj1 (StreamHelper)";
             bool dryRun = ctx.Payload.Bool("dryRun", false);
+            string[] candidates = StreamHelperNames(name);
 
             dynamic sm = ctx.SysManager();
 
             if (dryRun)
             {
                 dynamic tianRead = ctx.Cache.LookupItem(sm, "TIAN");
-                bool exists = ChildExistsByName(tianRead, deleteName);
+                string found = null;
+                foreach (string c in candidates) { if (ChildExistsByName(tianRead, c)) { found = c; break; } }
                 var dd = new Json.JObj();
                 dd["parentPath"] = "TIAN";
                 dd["name"] = name;
-                dd["deleteName"] = deleteName;
-                dd["exists"] = exists;
+                dd["deleteName"] = found;
+                dd["candidates"] = new Json.JArr(candidates);
+                dd["exists"] = found != null;
                 dd["deleted"] = false;
                 return dd;
             }
 
+            // Try each known StreamHelper node name (live '<name> (StreamHelper)',
+            // infosys '<name>_Obj1 (StreamHelper)'); the first DeleteChild that does
+            // not throw wins.
             dynamic tian = ComHelpers.GetTreeItem(sm, "TIAN");
-            tian.DeleteChild(deleteName);
+            string deleteName = null;
+            Exception last = null;
+            foreach (string c in candidates)
+            {
+                if (c == name) continue;
+                try { tian.DeleteChild(c); deleteName = c; break; }
+                catch (Exception ex) { last = ex; }
+            }
+            if (deleteName == null)
+            {
+                throw new BridgeException("No StreamHelper node found for '" + name + "' (tried '" + candidates[0] + "', '" + candidates[1] + "'): " + (last == null ? "" : last.Message));
+            }
             ctx.Cache.Invalidate("TIAN");
 
             var data = new Json.JObj();
@@ -314,6 +345,751 @@ namespace Te1000Daemon
             data["deleted"] = true;
             return data;
         }
+
+        // ===================================================================
+        // Native Analytics configuration: analytics_config_get / analytics_config_set
+        // ===================================================================
+        // Live-probed read-only (TcXaeShell 17, TCatSysManagerLib TREEITEMTYPE_
+        // ANALYTICSCONFIG=100 / LOGGER=101 / STREAM=102 / STREAMCONTEXT=103):
+        //  - TIAN (100) ProduceXml: TreeItem > AdiOids/AdiOid* (OIDs of every
+        //    ADI-capable object, INCLUDING each stream), AnalyticsConfig > Config
+        //    {StreamTargets/StreamTargetItem[Id], ActivateAlyLogger}, AnalyticsConfig >
+        //    StreamContexts/StreamContext[AdiOid,CallerOid,Category,Hide]{ItemName}.
+        //    ChildCount 0; contexts/streams are invisible to LookupTreeItem and to
+        //    child enumeration.
+        //  - sysManager.LookupTreeItemById(0, streamOid) resolves a stream (ItemType
+        //    102, path 'TIAN^<context ItemName>^<stream>'); its ProduceXml holds
+        //    AnalyticsStream[AdiOid,CallerOid,Category,Oid] > Config. stream.Parent is
+        //    the context item (ItemType 103). Typed lookups with 101/102/103 throw.
+        //  - Hide is the Stream Sources checkbox (Hide=false = source selected).
+        //    Consuming TIAN XML that LISTS a StreamContext selected it (Hide->false,
+        //    and Hide=true in that same XML did not stick). So TIAN writes never echo
+        //    the produced StreamContexts by default (contextsMode 'omit').
+        //  - TIAN/stream XML is only a PROJECTION of TF3500's managed model
+        //    (TwinCAT.Analytics.Logger.SystemManagerExtension 4.4.93, read by
+        //    reflection): ConfigModel.ReCalc reads the TIAN XML back through
+        //    RestoreProperties -> ImportStreamTargets (add/update by Id, NEVER
+        //    removes) and RestoreStreamSources (StreamContexts/Hide), then
+        //    SaveProperties -> SendConfigToTreeItem republishes the WHOLE model.
+        //    StreamModel.ReCalc never reads Config back; it only republishes. So a
+        //    target removed from the XML returns on the next model republish, and a
+        //    stream Config written to the stream item is overwritten. The only
+        //    importer of stream Config (ConfigModel.Import via the ImportConfiguration
+        //    command) opens a file dialog. target_remove and stream_edit therefore
+        //    refuse instead of writing something the model will undo.
+        // Every write is read-modify-write of the FULL produced XML inside the
+        // daemon (a partial TIAN ConsumeXml replaced the whole Config and wiped all
+        // targets). Credentials never leave the daemon: MQTT settings are redacted
+        // to a whitelist on every output. All write paths are UNVERIFIED live.
+
+        private const string RedactedValue = "<redacted>";
+        private static readonly string[] MqttSafeLeaves = new string[] {
+            "BrokerPort", "WithCertificates", "CommunicationTimeout", "KeepAlivePeriod", "TcpBufferSize",
+            "SecurityType", "TlsVersion", "Insecure", "IgnoreExpiration", "IsPskIdCaseSensitive", "IgnoreCnMismatch", "PskMode"
+        };
+        private static readonly System.Text.RegularExpressions.Regex SecretName =
+            new System.Text.RegularExpressions.Regex("crypt|passw|psk|cert|secret|token|key", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        private static readonly string[] StreamKeyFields = new string[] {
+            "AutostartStream", "SamplingDivider", "SamplesPerBuffer", "TargetId", "BuffersPerFile", "UseRingbuffer",
+            "FilesPerRingbuffer", "QueueMessages", "MqttBuffersPerQueue", "MqttQueueInFile", "MainTopic", "CompressionMode"
+        };
+
+        private sealed class AlyStream
+        {
+            public string Oid;
+            public dynamic Item;
+            public XmlDocument Doc;
+            public string Name;
+            public string Path;
+            public string CallerOid;
+        }
+
+        private sealed class AlySnapshot
+        {
+            public dynamic Tian;
+            public XmlDocument TianDoc;
+            public List<AlyStream> Streams;
+        }
+
+        private static bool IsNativeAnalytics(dynamic tian)
+        {
+            string xml = ComHelpers.SafeStr(delegate { return tian.ProduceXml(); });
+            return xml != null && xml.IndexOf("<AnalyticsConfig", StringComparison.Ordinal) >= 0;
+        }
+
+        private static XmlDocument LoadXml(string xml)
+        {
+            var d = new XmlDocument();
+            d.XmlResolver = null;
+            d.PreserveWhitespace = true;
+            d.LoadXml(xml);
+            return d;
+        }
+
+        private static XmlDocument CloneDoc(XmlDocument d) { return LoadXml(d.OuterXml); }
+
+        // '#x08502000' / '0x08502000' / '139468800' -> '0x08502000'.
+        private static string NormOid(string s)
+        {
+            if (s == null) return null;
+            s = s.Trim();
+            uint v;
+            if (s.StartsWith("#x", StringComparison.OrdinalIgnoreCase) || s.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!uint.TryParse(s.Substring(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out v)) return s;
+            }
+            else
+            {
+                long l;
+                if (!long.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out l)) return s;
+                v = unchecked((uint)l);
+            }
+            return "0x" + v.ToString("x8", CultureInfo.InvariantCulture);
+        }
+
+        private static string NormGuid(string s)
+        {
+            if (s == null) return null;
+            Guid g;
+            return Guid.TryParse(s.Trim(), out g) ? g.ToString("D") : s.Trim();
+        }
+
+        private static string Text(XmlNode parent, string xpath)
+        {
+            if (parent == null) return null;
+            XmlNode n = parent.SelectSingleNode(xpath);
+            return n == null ? null : n.InnerText;
+        }
+
+        private static bool HasElementChild(XmlNode e)
+        {
+            foreach (XmlNode c in e.ChildNodes) if (c.NodeType == XmlNodeType.Element) return true;
+            return false;
+        }
+
+        private static List<XmlElement> Elements(XmlNode root, string xpath)
+        {
+            var l = new List<XmlElement>();
+            foreach (XmlNode n in root.SelectNodes(xpath)) { XmlElement e = n as XmlElement; if (e != null) l.Add(e); }
+            return l;
+        }
+
+        private static List<XmlElement> Targets(XmlDocument tian) { return Elements(tian, "/TreeItem/AnalyticsConfig/Config/StreamTargets/StreamTargetItem"); }
+        private static List<XmlElement> Contexts(XmlDocument tian) { return Elements(tian, "/TreeItem/AnalyticsConfig/StreamContexts/StreamContext"); }
+        private static XmlElement StreamConfig(XmlDocument s) { return s.SelectSingleNode("/TreeItem/AnalyticsStream/Config") as XmlElement; }
+
+        private static AlySnapshot ReadAnalytics(dynamic sm)
+        {
+            var s = new AlySnapshot();
+            s.Tian = ComHelpers.GetTreeItem(sm, "TIAN");
+            string xml = ComHelpers.ProduceXml(s.Tian);
+            s.TianDoc = LoadXml(xml);
+            if (s.TianDoc.SelectSingleNode("/TreeItem/AnalyticsConfig/Config") == null)
+            {
+                throw new BridgeException("TIAN has no native AnalyticsConfig/Config (Analytics not configured, or the legacy DataLogger model); analytics_get/analytics_set support only the native model.");
+            }
+            s.Streams = new List<AlyStream>();
+            foreach (XmlElement n in Elements(s.TianDoc, "/TreeItem/AdiOids/AdiOid"))
+            {
+                string oid = NormOid(n.InnerText);
+                if (oid == null || !oid.StartsWith("0x", StringComparison.Ordinal)) continue;
+                int id = unchecked((int)uint.Parse(oid.Substring(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture));
+                dynamic item = null;
+                try { item = sm.LookupTreeItemById(0, id); } catch { item = null; }
+                if (item == null) continue;
+                if (ComHelpers.SafeInt(delegate { return item.ItemType; }, -1) != 102) continue;
+                var st = new AlyStream();
+                st.Oid = oid;
+                st.Item = item;
+                string sx = (string)ComHelpers.ProduceXml(item);
+                st.Doc = LoadXml(sx);
+                st.Name = ComHelpers.SafeStr(delegate { return item.Name; });
+                st.Path = ComHelpers.SafeStr(delegate { return item.PathName; });
+                XmlElement aly = st.Doc.SelectSingleNode("/TreeItem/AnalyticsStream") as XmlElement;
+                st.CallerOid = aly == null ? null : NormOid(aly.GetAttribute("CallerOid"));
+                s.Streams.Add(st);
+            }
+            return s;
+        }
+
+        // Flatten leaf elements under e into key -> {raw, display}. Inside
+        // MqttConnectionSettings only whitelisted leaves are displayed; any leaf
+        // whose name looks secret is redacted everywhere.
+        private static void FlattenLeaves(XmlElement e, string prefix, bool inMqtt, Dictionary<string, string[]> into, string skipChild)
+        {
+            var counts = new Dictionary<string, int>();
+            foreach (XmlNode c in e.ChildNodes)
+            {
+                XmlElement ce = c as XmlElement;
+                if (ce == null) continue;
+                int k; counts.TryGetValue(ce.Name, out k); counts[ce.Name] = k + 1;
+            }
+            var seen = new Dictionary<string, int>();
+            foreach (XmlNode c in e.ChildNodes)
+            {
+                XmlElement ce = c as XmlElement;
+                if (ce == null || ce.Name == skipChild) continue;
+                string key = ce.Name;
+                if (counts[ce.Name] > 1)
+                {
+                    int i; seen.TryGetValue(ce.Name, out i); seen[ce.Name] = i + 1;
+                    key = key + "[" + i.ToString(CultureInfo.InvariantCulture) + "]";
+                }
+                string path = prefix.Length == 0 ? key : prefix + "." + key;
+                bool mqtt = inMqtt || ce.Name == "MqttConnectionSettings";
+                if (HasElementChild(ce)) { FlattenLeaves(ce, path, mqtt, into, null); continue; }
+                string raw = ce.InnerText;
+                bool secret = Array.IndexOf(MqttSafeLeaves, ce.Name) < 0 && (mqtt || SecretName.IsMatch(ce.Name));
+                into[path] = new string[] { raw, secret && raw.Length > 0 ? RedactedValue : raw };
+            }
+        }
+
+        private static List<string> StreamSymbols(XmlElement cfg)
+        {
+            var l = new List<string>();
+            XmlNode sn = cfg == null ? null : cfg.SelectSingleNode("SymbolNames");
+            if (sn == null) return l;
+            foreach (XmlNode c in sn.ChildNodes)
+            {
+                XmlElement ce = c as XmlElement;
+                if (ce == null) continue;
+                string n = ce.GetAttribute("Name");
+                if (string.IsNullOrEmpty(n)) n = ce.GetAttribute("name");
+                if (string.IsNullOrEmpty(n)) n = ce.InnerText.Trim();
+                l.Add(n);
+            }
+            return l;
+        }
+
+        private static void FlattenTian(XmlDocument tian, Dictionary<string, string[]> into)
+        {
+            string v = Text(tian, "/TreeItem/AnalyticsConfig/Config/ActivateAlyLogger");
+            into["logger.ActivateAlyLogger"] = new string[] { v, v };
+            foreach (XmlElement t in Targets(tian))
+            {
+                FlattenLeaves(t, "target[" + NormGuid(t.GetAttribute("Id")) + "]", false, into, null);
+            }
+            foreach (XmlElement c in Contexts(tian))
+            {
+                string p = "context[" + NormOid(c.GetAttribute("CallerOid")) + "].";
+                string name = Text(c, "ItemName");
+                into[p + "ItemName"] = new string[] { name, name };
+                into[p + "AdiOid"] = new string[] { NormOid(c.GetAttribute("AdiOid")), NormOid(c.GetAttribute("AdiOid")) };
+                into[p + "Category"] = new string[] { c.GetAttribute("Category"), c.GetAttribute("Category") };
+                into[p + "Hide"] = new string[] { c.GetAttribute("Hide"), c.GetAttribute("Hide") };
+            }
+        }
+
+        private static void FlattenStream(string oid, string name, XmlDocument doc, Dictionary<string, string[]> into)
+        {
+            string p = "stream[" + oid + "]";
+            into[p + ".Name"] = new string[] { name, name };
+            XmlElement aly = doc.SelectSingleNode("/TreeItem/AnalyticsStream") as XmlElement;
+            string caller = aly == null ? null : NormOid(aly.GetAttribute("CallerOid"));
+            into[p + ".CallerOid"] = new string[] { caller, caller };
+            XmlElement cfg = StreamConfig(doc);
+            if (cfg == null) return;
+            FlattenLeaves(cfg, p, false, into, "SymbolNames");
+            string syms = string.Join(",", StreamSymbols(cfg).ToArray());
+            into[p + ".SymbolNames"] = new string[] { syms, syms };
+        }
+
+        private static Dictionary<string, string[]> FlattenAll(XmlDocument tian, List<AlyStream> streams)
+        {
+            var d = new Dictionary<string, string[]>();
+            FlattenTian(tian, d);
+            foreach (AlyStream st in streams)
+            {
+                FlattenStream(st.Oid, st.Name, st.Doc, d);
+            }
+            return d;
+        }
+
+        private static Json.JArr Diff(Dictionary<string, string[]> a, Dictionary<string, string[]> b)
+        {
+            var keys = new List<string>(a.Keys);
+            foreach (string k in b.Keys) if (!a.ContainsKey(k)) keys.Add(k);
+            var ea = Entities(a.Keys);
+            var eb = Entities(b.Keys);
+            var collapsed = new HashSet<string>();
+            var arr = new Json.JArr();
+            foreach (string k in keys)
+            {
+                // A whole target/context/stream added or removed: one entry, not one per leaf.
+                string ent = Entity(k);
+                if (ent != null && ea.Contains(ent) != eb.Contains(ent))
+                {
+                    if (!collapsed.Add(ent)) continue;
+                    var e = new Json.JObj();
+                    e["key"] = ent;
+                    e["before"] = ea.Contains(ent) ? "present" : null;
+                    e["after"] = eb.Contains(ent) ? "present" : null;
+                    arr.Add(e);
+                    continue;
+                }
+                string[] x; string[] y;
+                bool hx = a.TryGetValue(k, out x);
+                bool hy = b.TryGetValue(k, out y);
+                if (hx && hy && x[0] == y[0]) continue;
+                var o = new Json.JObj();
+                o["key"] = k;
+                o["before"] = hx ? x[1] : null;
+                o["after"] = hy ? y[1] : null;
+                if ((hx && x[1] == RedactedValue) || (hy && y[1] == RedactedValue)) o["secretChanged"] = true;
+                arr.Add(o);
+            }
+            return arr;
+        }
+
+        // 'target[<id>].Name' -> 'target[<id>]'; keys without an entity -> null.
+        private static string Entity(string key)
+        {
+            int i = key.IndexOf(']');
+            return (i > 0 && key.IndexOf('[') < i && key.IndexOf('.') > i) ? key.Substring(0, i + 1) : null;
+        }
+
+        private static HashSet<string> Entities(IEnumerable<string> keys)
+        {
+            var h = new HashSet<string>();
+            foreach (string k in keys) { string e = Entity(k); if (e != null) h.Add(e); }
+            return h;
+        }
+
+        private static Json.JObj LeafObj(XmlElement e, string skipChild)
+        {
+            var d = new Dictionary<string, string[]>();
+            FlattenLeaves(e, "", false, d, skipChild);
+            var o = new Json.JObj();
+            foreach (var kv in d) o[kv.Key] = kv.Value[1];
+            return o;
+        }
+
+        private static Json.JObj StreamModel(AlyStream st, bool verbose)
+        {
+            var o = new Json.JObj();
+            o["streamOid"] = st.Oid;
+            o["name"] = st.Name;
+            o["path"] = st.Path;
+            XmlElement aly = st.Doc.SelectSingleNode("/TreeItem/AnalyticsStream") as XmlElement;
+            string eb = aly == null ? "" : aly.GetAttribute("eventBased");
+            o["eventBased"] = eb.Length == 0 ? null : eb;
+            XmlElement cfg = StreamConfig(st.Doc);
+            if (cfg != null)
+            {
+                Json.JObj all = LeafObj(cfg, "SymbolNames");
+                if (!verbose)
+                {
+                    var key = new Json.JObj();
+                    foreach (string k in StreamKeyFields) if (all.Has(k)) key[k] = all[k];
+                    all = key;
+                }
+                o["config"] = all;
+                List<string> syms = StreamSymbols(cfg);
+                o["symbolCount"] = syms.Count;
+                o["symbols"] = new Json.JArr(syms.Take(200).Cast<object>());
+            }
+            return o;
+        }
+
+        private static string StreamTargetId(AlyStream st)
+        {
+            return NormGuid(Text(StreamConfig(st.Doc), "TargetId"));
+        }
+
+        // --- analytics_config_get --------------------------------------------
+        private static Json.JObj AnalyticsConfigGet(ActionContext ctx)
+        {
+            dynamic sm = ctx.SysManager();
+            AlySnapshot s = ReadAnalytics(sm);
+            bool verbose = ctx.Payload.Bool("verbose", false);
+            var m = new Json.JObj();
+            var flat = FlattenAll(s.TianDoc, s.Streams);
+            Json.JArr drift = Drift(flat);
+            if (drift != null) m["driftSinceLastCall"] = drift;
+            _lastSeen = flat;
+            m["activateAlyLogger"] = Text(s.TianDoc, "/TreeItem/AnalyticsConfig/Config/ActivateAlyLogger");
+
+            var targets = new Json.JArr();
+            foreach (XmlElement t in Targets(s.TianDoc))
+            {
+                string id = NormGuid(t.GetAttribute("Id"));
+                var o = new Json.JObj();
+                o["targetId"] = id;
+                // FILE targets carry an unused MqttConnectionSettings block; keep it out of the summary.
+                o["fields"] = LeafObj(t, Text(t, "Type") == "FILE" ? "MqttConnectionSettings" : null);
+                var refs = new Json.JArr();
+                foreach (AlyStream st in s.Streams) if (StreamTargetId(st) == id) refs.Add(st.Oid);
+                o["referencedByStreams"] = refs;
+                targets.Add(o);
+            }
+            m["targets"] = targets;
+
+            var matched = new HashSet<string>();
+            var contexts = new Json.JArr();
+            foreach (XmlElement c in Contexts(s.TianDoc))
+            {
+                string caller = NormOid(c.GetAttribute("CallerOid"));
+                var o = new Json.JObj();
+                o["callerOid"] = caller;
+                o["adiOid"] = NormOid(c.GetAttribute("AdiOid"));
+                o["category"] = c.GetAttribute("Category");
+                o["itemName"] = Text(c, "ItemName");
+                o["hide"] = c.GetAttribute("Hide");
+                var streams = new Json.JArr();
+                foreach (AlyStream st in s.Streams)
+                {
+                    if (st.CallerOid != caller) continue;
+                    streams.Add(StreamModel(st, verbose));
+                    matched.Add(st.Oid);
+                }
+                o["streams"] = streams;
+                contexts.Add(o);
+            }
+            m["contexts"] = contexts;
+            var orphans = new Json.JArr();
+            foreach (AlyStream st in s.Streams) if (!matched.Contains(st.Oid)) orphans.Add(StreamModel(st, verbose));
+            m["orphanStreams"] = orphans;
+            m["streamDiscovery"] = "TIAN AdiOids -> LookupTreeItemById(0, oid) with ItemType 102";
+            return m;
+        }
+
+        // Format a JSON payload value as XML text (bool -> true/false, integral double without '.0').
+        private static string XmlValue(object v)
+        {
+            if (v == null) return "";
+            if (v is bool) return ((bool)v) ? "true" : "false";
+            if (v is double)
+            {
+                double d = (double)v;
+                if (d == Math.Floor(d) && Math.Abs(d) < 1e15) return ((long)d).ToString(CultureInfo.InvariantCulture);
+                return d.ToString("R", CultureInfo.InvariantCulture);
+            }
+            return Convert.ToString(v, CultureInfo.InvariantCulture);
+        }
+
+        // Apply {"A": v, "B.C": v, "D": {"E": v}} onto existing LEAF elements under
+        // root. Unknown/non-leaf paths and *Crypted leaves are refused (the crypted
+        // values are produced by XAE's Broker Connect dialog; clone them via copyFrom).
+        private static void ApplyLeaves(XmlElement root, Json.JObj values, string prefix)
+        {
+            if (values == null) return;
+            foreach (var kv in values)
+            {
+                string[] parts = kv.Key.Split('.');
+                XmlElement cur = root;
+                foreach (string p in parts)
+                {
+                    XmlElement next = cur.SelectSingleNode(p) as XmlElement;
+                    if (next == null) throw new BridgeException("Unknown field '" + prefix + kv.Key + "' (no <" + p + "> element in the produced XML).");
+                    cur = next;
+                }
+                Json.JObj nested = kv.Value as Json.JObj;
+                if (nested != null) { ApplyLeaves(cur, nested, prefix + kv.Key + "."); continue; }
+                if (HasElementChild(cur)) throw new BridgeException("Field '" + prefix + kv.Key + "' is not a leaf; address its children instead.");
+                if (cur.Name.EndsWith("Crypted", StringComparison.Ordinal))
+                {
+                    throw new BridgeException("'" + prefix + kv.Key + "' is an XAE-encrypted value and cannot be set; use target_add copyFrom=<targetId> to clone existing credentials.");
+                }
+                cur.InnerText = XmlValue(kv.Value);
+            }
+        }
+
+        private static XmlElement FindTarget(XmlDocument tian, string id)
+        {
+            foreach (XmlElement t in Targets(tian)) if (NormGuid(t.GetAttribute("Id")) == id) return t;
+            throw new BridgeException("Stream target not found: " + id);
+        }
+
+        private static XmlElement FindContext(XmlDocument tian, string callerOid)
+        {
+            XmlElement hit = null;
+            foreach (XmlElement c in Contexts(tian))
+            {
+                if (NormOid(c.GetAttribute("CallerOid")) != callerOid) continue;
+                if (hit != null) throw new BridgeException("More than one StreamContext has CallerOid " + callerOid);
+                hit = c;
+            }
+            if (hit == null) throw new BridgeException("StreamContext not found for callerOid " + callerOid);
+            return hit;
+        }
+
+        private static AlyStream FindStream(AlySnapshot s, Json.JObj p)
+        {
+            string oid = p.Truthy("streamOid") ? NormOid(p.Str("streamOid")) : null;
+            string name = p.Truthy("stream") ? p.Str("stream") : null;
+            if (oid == null && name == null) throw new BridgeException("streamOid or stream (name) is required");
+            AlyStream hit = null;
+            foreach (AlyStream st in s.Streams)
+            {
+                if (oid != null ? st.Oid != oid : st.Name != name) continue;
+                if (hit != null) throw new BridgeException("Stream name '" + name + "' is ambiguous; pass streamOid.");
+                hit = st;
+            }
+            if (hit == null) throw new BridgeException("Stream not found: " + (oid ?? name));
+            return hit;
+        }
+
+        // TIAN ConsumeXml payload: the full planned document with StreamContexts
+        // handled per mode — 'omit' (default: drop the element, never re-select
+        // sources), 'visibleOnly' (keep only Hide=false contexts), 'asProduced'
+        // (echo everything; known to select every listed source).
+        private static string TianPayload(XmlDocument planned, string mode)
+        {
+            XmlDocument d = CloneDoc(planned);
+            XmlNode scs = d.SelectSingleNode("/TreeItem/AnalyticsConfig/StreamContexts");
+            if (scs != null && mode == "omit")
+            {
+                scs.ParentNode.RemoveChild(scs);
+            }
+            else if (scs != null && mode == "visibleOnly")
+            {
+                foreach (XmlElement c in Contexts(d))
+                {
+                    if (c.GetAttribute("Hide").Trim() != "false") c.ParentNode.RemoveChild(c);
+                }
+            }
+            return d.OuterXml;
+        }
+
+        // --- analytics_config_set ----------------------------------------------
+        private static Json.JObj AnalyticsConfigSet(ActionContext ctx)
+        {
+            Json.JObj p = ctx.Payload;
+            string op = ctx.Require("op");
+            bool dryRun = p.Bool("dryRun", false);
+            string mode = p.Truthy("contextsMode") ? p.Str("contextsMode") : "omit";
+            if (mode != "omit" && mode != "visibleOnly" && mode != "asProduced") throw new BridgeException("contextsMode must be omit|visibleOnly|asProduced");
+
+            dynamic sm = ctx.SysManager();
+            AlySnapshot before = ReadAnalytics(sm);
+            var result = new Json.JObj();
+            result["op"] = op;
+            result["dryRun"] = dryRun;
+            Json.JArr drift = Drift(FlattenAll(before.TianDoc, before.Streams));
+            if (drift != null) result["driftSinceLastCall"] = drift;
+            if (drift != null && !dryRun && !p.Bool("acceptDrift", false))
+            {
+                throw new BridgeException("Analytics configuration changed since this daemon last read it (" + drift.Count.ToString(CultureInfo.InvariantCulture) +
+                    " keys, e.g. '" + ((Json.JObj)drift[0]).Str("key") + "'): XAE's Analytics model may have republished an older state. Inspect with analytics_get, then re-run with acceptDrift:true.");
+            }
+
+            if (op == "stream_add") return StreamAdd(ctx, sm, before, result);
+            if (op == "stream_remove") return StreamRemove(ctx, sm, before, result);
+
+            XmlDocument planned = null;       // TIAN plan
+            switch (op)
+            {
+                case "logger_enable":
+                {
+                    if (!p.Has("enabled")) throw new BridgeException("enabled is required");
+                    planned = CloneDoc(before.TianDoc);
+                    XmlNode n = planned.SelectSingleNode("/TreeItem/AnalyticsConfig/Config/ActivateAlyLogger");
+                    if (n == null) throw new BridgeException("Produced TIAN XML has no ActivateAlyLogger element.");
+                    n.InnerText = p.Bool("enabled") ? "true" : "false";
+                    break;
+                }
+                case "target_edit":
+                {
+                    planned = CloneDoc(before.TianDoc);
+                    XmlElement t = FindTarget(planned, NormGuid(ctx.Require("targetId")));
+                    Json.JObj fields = p.Obj("fields");
+                    if (fields == null || fields.Count == 0) throw new BridgeException("fields is required");
+                    ApplyLeaves(t, fields, "");
+                    break;
+                }
+                case "target_add":
+                {
+                    planned = CloneDoc(before.TianDoc);
+                    Json.JObj fields = p.Obj("fields");
+                    if (fields == null || !fields.Truthy("Name")) throw new BridgeException("fields.Name is required");
+                    List<XmlElement> all = Targets(planned);
+                    XmlElement template = null;
+                    bool copy = p.Truthy("copyFrom");
+                    if (copy) template = FindTarget(planned, NormGuid(p.Str("copyFrom")));
+                    else
+                    {
+                        string type = fields.Truthy("Type") ? fields.Str("Type") : "FILE";
+                        foreach (XmlElement t in all) if (Text(t, "Type") == type) { template = t; break; }
+                    }
+                    if (template == null) throw new BridgeException("No existing stream target to use as the element template; pass copyFrom or add one target in XAE first.");
+                    XmlElement clone = (XmlElement)template.CloneNode(true);
+                    if (!copy)
+                    {
+                        // Never inherit another target's credentials/broker implicitly.
+                        foreach (XmlElement leaf in Elements(clone, ".//MqttConnectionSettings//*"))
+                        {
+                            if (!HasElementChild(leaf) && Array.IndexOf(MqttSafeLeaves, leaf.Name) < 0) leaf.InnerText = "";
+                        }
+                    }
+                    string newId = Guid.NewGuid().ToString("D");
+                    clone.SetAttribute("Id", newId);
+                    template.ParentNode.AppendChild(clone);
+                    ApplyLeaves(clone, fields, "");
+                    result["newTargetId"] = newId;
+                    break;
+                }
+                case "target_remove":
+                    throw new BridgeException("target_remove is not supported through the Automation Interface: TF3500's ConfigModel only adds/updates stream targets " +
+                        "from the TIAN XML (ImportStreamTargets) and republishes its full target list on the next recalc, so a removed target comes back " +
+                        "(seen live: a removed clone reappeared after the next Analytics write). Delete the target in XAE: Analytics > Stream Targets tab.");
+                case "context_hide":
+                {
+                    if (!p.Has("hide")) throw new BridgeException("hide is required");
+                    planned = CloneDoc(before.TianDoc);
+                    XmlElement c = FindContext(planned, NormOid(ctx.Require("callerOid")));
+                    c.SetAttribute("Hide", p.Bool("hide") ? "true" : "false");
+                    mode = "visibleOnly"; // the listed set IS the selected-source set
+                    break;
+                }
+                case "stream_edit":
+                    throw new BridgeException("stream_edit is not supported through the Automation Interface: stream settings live in TF3500's StreamModel, " +
+                        "which republishes its own Config over the stream item on every recalc (a ConsumeXml there is silently undone, seen live) and has no " +
+                        "settings command; the only importer is the GUI Import Configuration dialog. Edit the stream in XAE: stream > Data Handling tab.");
+                default:
+                    throw new BridgeException("Unknown op '" + op + "'. Expected logger_enable|target_add|target_edit|context_hide|stream_add|stream_remove.");
+            }
+
+            var beforeFlat = FlattenAll(before.TianDoc, before.Streams);
+            var plannedFlat = FlattenAll(planned, before.Streams);
+            result["contextsMode"] = planned != null ? mode : null;
+            result["plannedDiff"] = Diff(beforeFlat, plannedFlat);
+            if (dryRun) { result["written"] = false; return result; }
+
+            ComHelpers.ConsumeXml(before.Tian, TianPayload(planned, mode));
+            ctx.Cache.Invalidate("TIAN");
+            return Finish(sm, p, beforeFlat, plannedFlat, result);
+        }
+
+        // Last full state this daemon saw (after a get, or the settled state after
+        // a write). Every call compares against it, so a model republish between
+        // calls (the resurrected-target case) is reported instead of silently
+        // becoming the next write's baseline.
+        // ponytail: one slot per daemon process, keyed by nothing; a second open
+        // solution would show up as drift, which is the safe direction.
+        private static Dictionary<string, string[]> _lastSeen;
+
+        private static Json.JArr Drift(Dictionary<string, string[]> now)
+        {
+            Json.JArr d = _lastSeen == null ? null : Diff(_lastSeen, now);
+            return (d == null || d.Count == 0) ? null : d;
+        }
+
+        // Re-read the FULL state twice: right after the write and again after
+        // settleMs (default 2000), because the TF3500 model republishes on its own
+        // recalc. Diff/notAsPlanned use the settled read and cover every key of
+        // every target, context and stream; 'unstable' lists keys that moved
+        // between the two reads.
+        private static Json.JObj Finish(dynamic sm, Json.JObj p, Dictionary<string, string[]> beforeFlat, Dictionary<string, string[]> plannedFlat, Json.JObj result)
+        {
+            AlySnapshot first = ReadAnalytics(sm);
+            var firstFlat = FlattenAll(first.TianDoc, first.Streams);
+            int settle = Math.Max(0, Math.Min(10000, p.Int("settleMs", 2000)));
+            System.Threading.Thread.Sleep(settle);
+            AlySnapshot after = ReadAnalytics(sm);
+            var afterFlat = FlattenAll(after.TianDoc, after.Streams);
+            _lastSeen = afterFlat;
+            result["written"] = true;
+            result["settleMs"] = settle;
+            result["diff"] = Diff(beforeFlat, afterFlat);
+            Json.JArr unstable = Diff(firstFlat, afterFlat);
+            if (unstable.Count > 0) result["unstable"] = unstable;
+            if (plannedFlat != null)
+            {
+                Json.JArr off = Diff(plannedFlat, afterFlat);
+                result["notAsPlanned"] = off;
+                result["verified"] = off.Count == 0 && unstable.Count == 0;
+            }
+            return result;
+        }
+
+        // Context item: a stream's Parent (works while the context is hidden), else
+        // LookupTreeItem('TIAN^<ItemName>') when the name is unique (needs Hide=false).
+        private static dynamic ResolveContextItem(dynamic sm, AlySnapshot s, string callerOid)
+        {
+            foreach (AlyStream st in s.Streams)
+            {
+                if (st.CallerOid != callerOid) continue;
+                dynamic parent = null;
+                try { parent = st.Item.Parent; } catch { parent = null; }
+                if (parent != null) return parent;
+            }
+            XmlElement c = FindContext(s.TianDoc, callerOid);
+            string name = Text(c, "ItemName");
+            int same = 0;
+            foreach (XmlElement o in Contexts(s.TianDoc)) if (Text(o, "ItemName") == name) same++;
+            dynamic item = same == 1 ? ComHelpers.TryGetTreeItem(sm, "TIAN^" + name) : null;
+            if (item == null)
+            {
+                throw new BridgeException("StreamContext " + callerOid + " ('" + name + "') is not addressable: it has no stream to reach it through" +
+                    (same > 1 ? " and its ItemName is shared by " + same.ToString(CultureInfo.InvariantCulture) + " contexts" : " and is hidden (Hide=" + c.GetAttribute("Hide") + ")") +
+                    ". Select the source first (op=context_hide hide=false), or add the first stream in XAE.");
+            }
+            return item;
+        }
+
+        // stream_add (EXPERIMENTAL, unverified live): CreateChild(name, subType=0)
+        // on the context item, ghost-guarded (must come back ItemType 102 named
+        // <name>). TF3500 itself creates streams by ConsumeXml of
+        // <AddStream Name Oid IsEventBased/> on the context item
+        // (StreamContextModel.CreateStreamProgrammatically) - the fallback if
+        // CreateChild proves unusable.
+        private static Json.JObj StreamAdd(ActionContext ctx, dynamic sm, AlySnapshot before, Json.JObj result)
+        {
+            Json.JObj p = ctx.Payload;
+            string callerOid = NormOid(ctx.Require("callerOid"));
+            string name = ctx.Require("name");
+            int subType = p.Int("subType", 0);
+            foreach (AlyStream st in before.Streams)
+            {
+                if (st.CallerOid == callerOid && st.Name == name) throw new BridgeException("Context " + callerOid + " already has a stream named '" + name + "' (" + st.Oid + ").");
+            }
+            dynamic ctxItem = ResolveContextItem(sm, before, callerOid);
+            string ctxPath = ComHelpers.SafeStr(delegate { return ctxItem.PathName; });
+            result["contextPath"] = ctxPath;
+            result["name"] = name;
+            result["subType"] = subType;
+            if (IsDryRun(p)) { result["written"] = false; return result; }
+
+            var beforeFlat = FlattenAll(before.TianDoc, before.Streams);
+            dynamic child = ctxItem.CreateChild(name, subType, "", null);
+            string actual = child == null ? null : ComHelpers.SafeStr(delegate { return child.Name; });
+            int type = child == null ? -1 : ComHelpers.SafeInt(delegate { return child.ItemType; }, -1);
+            if (child == null || actual != name || type != 102)
+            {
+                if (!string.IsNullOrWhiteSpace(actual)) { try { ctxItem.DeleteChild(actual); } catch { } }
+                throw new BridgeException("CreateChild('" + name + "', " + subType.ToString(CultureInfo.InvariantCulture) + ") under '" + ctxPath + "' did not produce an Analytics stream (got " +
+                    (child == null ? "null" : "name='" + actual + "', itemType=" + type.ToString(CultureInfo.InvariantCulture)) + "); any stray child was deleted. Add the stream in XAE (Stream Sources tab) instead.");
+            }
+            result["created"] = ComHelpers.ConvertTreeItem(child);
+            ctx.Cache.Invalidate("TIAN");
+            return Finish(sm, p, beforeFlat, null, result);
+        }
+
+        // stream_remove (unverified live): DeleteChild(<stream name>) on the
+        // stream's Parent (the context item), then confirm the OID is gone.
+        private static Json.JObj StreamRemove(ActionContext ctx, dynamic sm, AlySnapshot before, Json.JObj result)
+        {
+            AlyStream st = FindStream(before, ctx.Payload);
+            dynamic parent = st.Item.Parent;
+            result["stream"] = StreamModel(st, false);
+            result["contextPath"] = ComHelpers.SafeStr(delegate { return parent.PathName; });
+            if (IsDryRun(ctx.Payload)) { result["written"] = false; return result; }
+            var beforeFlat = FlattenAll(before.TianDoc, before.Streams);
+            parent.DeleteChild(st.Name);
+            ctx.Cache.Invalidate("TIAN");
+            Json.JObj r = Finish(sm, ctx.Payload, beforeFlat, null, result);
+            bool gone = false;
+            foreach (object o in (Json.JArr)r["diff"])
+            {
+                Json.JObj d = (Json.JObj)o;
+                if (d.Str("key") == "stream[" + st.Oid + "].Name" && d["after"] == null) gone = true;
+            }
+            r["verified"] = gone;
+            return r;
+        }
+
+        private static bool IsDryRun(Json.JObj p) { return p.Bool("dryRun", false); }
 
         // ===================================================================
         // private helpers
@@ -493,6 +1269,12 @@ namespace Te1000Daemon
             return current;
         }
 
+        // Known node names for a TIAN StreamHelper created as <name>.
+        private static string[] StreamHelperNames(string name)
+        {
+            return new string[] { name + " (StreamHelper)", name + "_Obj1 (StreamHelper)", name };
+        }
+
         // Get-ChildTreeItemByName equivalent: true if a direct child of the parent
         // tree item has the given name (1-based scan). Used by analytics dry-run.
         private static bool ChildExistsByName(dynamic parentItem, string childName)
@@ -513,7 +1295,7 @@ namespace Te1000Daemon
         // (DeleteChild by the actual non-blank name) and THROW a descriptive error.
         // (Mirrors TreeActions.AssertWellFormedChild; duplicated to keep this group
         // self-contained.)
-        private static void AssertWellFormedChild(dynamic parent, dynamic child, string requestedName, int subType, string parentPath)
+        private static void AssertWellFormedChild(dynamic parent, dynamic child, string requestedName, int subType, string parentPath, string[] acceptedNames)
         {
             string childActualName = ComHelpers.SafeStr(delegate { return child.Name; });
             string childPath = ComHelpers.SafeStr(delegate { return child.PathName; });
@@ -527,13 +1309,13 @@ namespace Te1000Daemon
             {
                 reason = "returned child has a blank name";
             }
-            else if (childActualName != requestedName)
+            else if (Array.IndexOf(acceptedNames, childActualName) < 0)
             {
                 reason = "returned child name '" + childActualName + "' does not match requested name '" + requestedName + "'";
             }
             else
             {
-                string expectedPath = parentPath + "^" + requestedName;
+                string expectedPath = parentPath + "^" + childActualName;
                 if (!string.IsNullOrWhiteSpace(childPath) && childPath != expectedPath)
                 {
                     reason = "returned child path '" + childPath + "' is not under requested parent (expected '" + expectedPath + "')";

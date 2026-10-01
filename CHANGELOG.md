@@ -19,6 +19,25 @@ All notable changes to this project are documented here. The format is based on
 - `deploy/windows/`: `install.ps1` (idempotent npm ci + build + interactive scheduled task
   `TE1000-Daemon-<pipe>` + pipe ping), `te1000-daemon-run.ps1`, `te1000-mcp-launch.ps1`, and
   client snippets for Claude Code, OpenCode and Codex under `clients/`.
+- **`tc_measurement analytics_get`** — redacted read of the native TwinCAT Analytics
+  configuration (`TIAN` `AnalyticsConfig`): `ActivateAlyLogger`, stream targets (MQTT
+  broker/user/certificate/crypted fields → `"<redacted>"`), stream contexts
+  (`callerOid`, `itemName`, `hide`) and their streams (OID, name, key `Config` fields,
+  symbol count). Streams are hidden from `LookupTreeItem` and child enumeration; they are
+  found through `TIAN` `AdiOids` + `LookupTreeItemById(0, oid)` (ItemType 102).
+- **`tc_measurement analytics_set`** — `op` = `logger_enable`, `target_add` / `target_edit`,
+  `context_hide`, `stream_add` (experimental) / `stream_remove` (delete-guarded).
+  Full-XML read-modify-write inside the daemon (credentials never leave it), `dryRun`
+  plan, and after every write a full-state re-read (immediate and after `settleMs`) with
+  a redacted diff, `notAsPlanned`, `unstable` and `verified`. Writes are refused while
+  the state differs from the daemon's last read (`driftSinceLastCall`, override
+  `acceptDrift`). TIAN writes drop `StreamContexts` by default (`contextsMode: omit`),
+  because echoing them re-selects every source. `logger_enable`, `target_add`,
+  `target_edit` and `context_hide` are verified live.
+- `target_remove` and `stream_edit` refuse with an explanation. The TIAN XML is a
+  projection of TF3500's managed model: its recalc imports targets add/update-only and
+  republishes them (a removed target came back live), and it overwrites stream `Config`
+  written to the stream item (a `SamplingDivider` edit was silently undone live).
 
 ### Fixed
 - `plc_pou replace` accepts `replaceWith: ""` (deletes the match); only a missing value is rejected.
@@ -42,6 +61,10 @@ All notable changes to this project are documented here. The format is based on
   reports `saved: false, unchanged: true` when the file did not change on disk.
 - `install.ps1` refuses to take over an existing task that runs another install (`-Force`
   overrides) and takes `-RunLevel Limited|Highest`. Client snippets all name the server `te1000`.
+- `logger_create` on the native model now fails with a clear message instead of a
+  `CreateChild returned null` ghost error (DataLogger objects do not exist there).
+- `stream_create` accepts the live StreamHelper name `<name> (StreamHelper)` as well as
+  the documented `<name>_Obj1 (StreamHelper)`; `stream_delete` tries both.
 
 ## [2.4.0] — 2026-08-12
 

@@ -613,18 +613,38 @@ const toolSchemas = {
       "scope_rename (project, path, newName) — ChangeName on the element at path; " +
       "scope_record (project, state 'start'|'stop') — StartRecord/StopRecord; GUARDED: state='start' performs LIVE data acquisition and requires confirm=\"" + MEASUREMENT_RECORD_CONFIRMATION + "\" (state='stop' needs no confirm); " +
       "analytics_create (name, template? = full Analytics project template path [must resolve or pass explicitly], destination? = folder) — AddFromTemplate a new Analytics project (project creation ONLY; network/function wiring is UNVERIFIED and not implemented); " +
-      "logger_create (name, before?) — CreateChild a DataLogger (subType 1) under TIAN (config edit, no confirm); " +
+      "analytics_get (read-only) — redacted native TIAN AnalyticsConfig: activateAlyLogger, targets [{targetId, fields (MQTT broker/user/certs/crypted -> \"<redacted>\"), referencedByStreams}], contexts [{callerOid, adiOid, itemName, hide, streams [{streamOid, name, path, config (key fields; verbose:true = all leaves), symbolCount, symbols}]}]; streams are found via TIAN AdiOids + LookupTreeItemById(0, oid) (they are hidden from tree lookup); driftSinceLastCall lists keys changed since this daemon's previous read/write; " +
+      "analytics_set (op, dryRun?, contextsMode? 'omit'|'visibleOnly'|'asProduced' default omit) — full-XML read-modify-write inside the daemon (credentials never leave it; never a partial ConsumeXml); returns plannedDiff; a write is refused while driftSinceLastCall is non-empty (XAE's Analytics model republished another state; re-read with analytics_get or pass acceptDrift:true); after a write the FULL state is re-read twice (immediately and after settleMs, default 2000) and the result carries the redacted diff, notAsPlanned (every key of every target/context/stream that differs from the plan), unstable (keys that moved between the two reads) and verified. ops: " +
+      "logger_enable (enabled); target_add (fields {Name, Type FILE|MQTT, Directory, TimeType, MqttConnectionSettings:{Broker, BrokerPort, ...}}, copyFrom? = targetId to clone incl. its encrypted credentials; without it secrets start empty); target_edit (targetId, fields); " +
+      "context_hide (callerOid, hide) — Stream Sources selection; stream_add (callerOid, name, subType? default 0, EXPERIMENTAL, unverified); stream_remove (streamOid | stream, GUARDED confirm, unverified). " +
+      "REFUSED by design: target_remove and stream_edit — TF3500's managed model only adds/updates targets from TIAN XML and republishes its own list (a removed target comes back), and it overwrites stream Config written to the stream item; delete targets / edit stream settings in XAE. *Crypted values cannot be set; " +
+      "logger_create (name, before?) — legacy: CreateChild a DataLogger (subType 1) under TIAN; refused with a clear message on the native AnalyticsConfig model, where DataLoggers do not exist; " +
       "logger_delete (name, dryRun?, confirm) — DeleteChild under TIAN, GUARDED confirm=\"" + DELETE_CONFIRMATION + "\" (dryRun:true previews existence without deleting); " +
-      "stream_create (name, before?) — CreateChild a StreamHelper (subType 0) under TIAN (config edit, no confirm); " +
-      "stream_delete (name, dryRun?, confirm) — DeleteChild under TIAN, GUARDED confirm=\"" + DELETE_CONFIRMATION + "\"; the actual node name is '<name>_Obj1 (StreamHelper)' (the suffix is appended for you). " +
-      "For raw ProduceXml/ConsumeXml on a TIAN logger/stream node (e.g. 'TIAN^<loggerName>') use tc_tree get_xml/set_xml. " +
+      "stream_create (name, before?) — legacy StreamHelper: CreateChild(subType 0) under TIAN; the node comes back as '<name> (StreamHelper)' (live) or '<name>_Obj1 (StreamHelper)' (infosys), both accepted; NOT a native stream (use analytics_set stream_add); " +
+      "stream_delete (name, dryRun?, confirm) — DeleteChild of the StreamHelper under TIAN, GUARDED confirm=\"" + DELETE_CONFIRMATION + "\"; tries '<name> (StreamHelper)' then '<name>_Obj1 (StreamHelper)'. " +
+      "Do NOT use tc_tree set_xml on TIAN: a partial ConsumeXml replaces the whole Config, and echoing StreamContexts re-selects every source; use analytics_set. " +
       "OMITTED as UNVERIFIED: Scope data-export (SaveSVD/ExportCSV/ExportTDMS/ExportBinary/ExportDAT), Scope-Server (ShowControl/CloseControl/Disconnect), LookUpChild, and all Scope/Analytics enums. Nothing here targets the safety system.",
     inputSchema: {
       action: z.enum([
         "scope_create", "scope_add_child", "scope_rename", "scope_record",
         "analytics_create",
         "logger_create", "logger_delete", "stream_create", "stream_delete",
+        "analytics_get", "analytics_set",
       ]),
+      verbose: z.boolean().optional().describe("analytics_get: every stream Config leaf instead of the key fields"),
+      op: z.enum(["logger_enable", "target_add", "target_edit", "target_remove", "context_hide", "stream_edit", "stream_add", "stream_remove"]).optional().describe("analytics_set operation"),
+      contextsMode: z.enum(["omit", "visibleOnly", "asProduced"]).optional().describe("analytics_set TIAN writes: how StreamContexts are sent back; default omit"),
+      enabled: z.boolean().optional().describe("logger_enable: ActivateAlyLogger"),
+      targetId: z.string().optional().describe("stream target Id (GUID)"),
+      copyFrom: z.string().optional().describe("target_add: clone this target Id incl. its encrypted credentials"),
+      fields: z.record(z.string(), z.any()).optional().describe("target_add/target_edit: StreamTargetItem leaf values, dotted or nested (MqttConnectionSettings.Broker)"),
+      callerOid: z.string().optional().describe("stream context CallerOid (0x.. or decimal)"),
+      hide: z.boolean().optional().describe("context_hide: Hide value"),
+      stream: z.string().optional().describe("stream name (must be unique; else use streamOid)"),
+      streamOid: z.string().optional().describe("stream OID (0x.. or decimal), as analytics_get streamOid"),
+      subType: z.number().int().optional().describe("stream_add CreateChild subType; default 0 (unverified)"),
+      acceptDrift: z.boolean().optional().describe("analytics_set: write even though the state changed since this daemon's last read"),
+      settleMs: z.number().int().min(0).max(10000).optional().describe("analytics_set: wait before the second post-write read; default 2000"),
       name: z.string().optional(),
       template: z.string().optional(),
       destination: z.string().optional(),
