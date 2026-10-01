@@ -1,0 +1,22 @@
+# Codex: merge into ~/.codex/config.toml. Replace <host> and <user>.
+# TOML literal strings ('...') keep the Windows backslashes as written.
+
+# Remote Windows host over ssh.
+[mcp_servers.te1000]
+command = "ssh"
+args = [
+  "-T", "-o", "BatchMode=yes", "<host>",
+  "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+  "-File", 'C:\Users\<user>\AppData\Local\TwinCAT-XAE-MCP\deploy\windows\te1000-mcp-launch.ps1',
+  "-Pipe", "te1000",
+]
+# Builds and activations can run for minutes.
+tool_timeout_sec = 1800
+
+# Codex running on the Windows host itself (use instead of the entry above):
+# [mcp_servers.te1000]
+# command = "powershell.exe"
+# args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+#         "-File", 'C:\Users\<user>\AppData\Local\TwinCAT-XAE-MCP\deploy\windows\te1000-mcp-launch.ps1',
+#         "-Pipe", "te1000"]
+# tool_timeout_sec = 1800

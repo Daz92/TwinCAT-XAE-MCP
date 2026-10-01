@@ -1009,6 +1009,12 @@ server.registerTool(
 
 function main() {
   serveStdio(buildServer, { onerror: (error) => console.error("Server error:", error) });
+  // The daemon pipe socket keeps the event loop alive, so a client that goes
+  // away (ssh session closed, stdin EOF/broken) would otherwise leave this
+  // front running forever. The daemon itself is a separate process and stays.
+  const quit = () => process.exit(0);
+  for (const ev of ["end", "close", "error"]) process.stdin.on(ev, quit);
+  for (const sig of ["SIGHUP", "SIGTERM", "SIGINT"]) process.on(sig, quit);
   console.error("te1000-mcp server running on stdio (native daemon mode; MCP 2026-07-28 stateless + legacy initialize)");
 }
 

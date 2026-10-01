@@ -1,0 +1,28 @@
+// OpenCode: merge into opencode.jsonc (project) or ~/.config/opencode/opencode.jsonc.
+// Replace <host> and <user>. Keep exactly one of the two entries enabled.
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    // Remote Windows host over ssh.
+    "te1000": {
+      "type": "local",
+      "command": [
+        "ssh", "-T", "-o", "BatchMode=yes", "<host>",
+        "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-File", "C:\\Users\\<user>\\AppData\\Local\\TwinCAT-XAE-MCP\\deploy\\windows\\te1000-mcp-launch.ps1",
+        "-Pipe", "te1000"
+      ],
+      "enabled": true
+    },
+    // OpenCode running on the Windows host itself.
+    "te1000-local": {
+      "type": "local",
+      "command": [
+        "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-File", "C:\\Users\\<user>\\AppData\\Local\\TwinCAT-XAE-MCP\\deploy\\windows\\te1000-mcp-launch.ps1",
+        "-Pipe", "te1000"
+      ],
+      "enabled": false
+    }
+  }
+}
