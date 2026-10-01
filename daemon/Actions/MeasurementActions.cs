@@ -499,18 +499,40 @@ namespace Te1000Daemon
                 try { item = sm.LookupTreeItemById(0, id); } catch { item = null; }
                 if (item == null) continue;
                 if (ComHelpers.SafeInt(delegate { return item.ItemType; }, -1) != 102) continue;
-                var st = new AlyStream();
-                st.Oid = oid;
-                st.Item = item;
-                string sx = (string)ComHelpers.ProduceXml(item);
-                st.Doc = LoadXml(sx);
-                st.Name = ComHelpers.SafeStr(delegate { return item.Name; });
-                st.Path = ComHelpers.SafeStr(delegate { return item.PathName; });
-                XmlElement aly = st.Doc.SelectSingleNode("/TreeItem/AnalyticsStream") as XmlElement;
-                st.CallerOid = aly == null ? null : NormOid(aly.GetAttribute("CallerOid"));
-                s.Streams.Add(st);
+                AddStream(s, item, oid);
+            }
+            // AdiOids only lists streams known when TIAN was last recalculated; a stream created in
+            // the GUI since then is missing there. Selected sources are tree children of TIAN
+            // (context, ItemType 103) with their streams (ItemType 102) below them.
+            foreach (dynamic context in ComHelpers.Children(s.Tian))
+            {
+                if (ComHelpers.SafeInt(delegate { return context.ItemType; }, -1) != 103) continue;
+                foreach (dynamic item in ComHelpers.Children(context))
+                {
+                    if (ComHelpers.SafeInt(delegate { return item.ItemType; }, -1) != 102) continue;
+                    AddStream(s, item, null);
+                }
             }
             return s;
+        }
+
+        // Adds the stream unless an entry with the same OID is already in the snapshot. The OID is the
+        // stream's own AnalyticsStream/@Oid, or knownOid when the caller already resolved it by id.
+        private static void AddStream(AlySnapshot s, dynamic item, string knownOid)
+        {
+            var st = new AlyStream();
+            st.Item = item;
+            string sx = (string)ComHelpers.ProduceXml(item);
+            st.Doc = LoadXml(sx);
+            XmlElement aly = st.Doc.SelectSingleNode("/TreeItem/AnalyticsStream") as XmlElement;
+            string own = aly == null ? null : NormOid(aly.GetAttribute("Oid"));
+            st.Oid = string.IsNullOrEmpty(own) ? knownOid : own;
+            if (string.IsNullOrEmpty(st.Oid)) return;
+            foreach (AlyStream known in s.Streams) if (known.Oid == st.Oid) return;
+            st.Name = ComHelpers.SafeStr(delegate { return item.Name; });
+            st.Path = ComHelpers.SafeStr(delegate { return item.PathName; });
+            st.CallerOid = aly == null ? null : NormOid(aly.GetAttribute("CallerOid"));
+            s.Streams.Add(st);
         }
 
         // Flatten leaf elements under e into key -> {raw, display}. Inside
@@ -550,6 +572,20 @@ namespace Te1000Daemon
             var l = new List<string>();
             XmlNode sn = cfg == null ? null : cfg.SelectSingleNode("SymbolNames");
             if (sn == null) return l;
+            // TF3500 stores the selection as base64 of the NUL-separated symbol names (trailing NUL).
+            if (!HasElementChild(sn))
+            {
+                string b64 = sn.InnerText.Trim();
+                if (b64.Length == 0) return l;
+                byte[] raw;
+                try { raw = Convert.FromBase64String(b64); }
+                catch (FormatException) { l.Add(b64); return l; }
+                foreach (string n in System.Text.Encoding.UTF8.GetString(raw).Split('\0'))
+                {
+                    if (n.Length > 0) l.Add(n);
+                }
+                return l;
+            }
             foreach (XmlNode c in sn.ChildNodes)
             {
                 XmlElement ce = c as XmlElement;
@@ -750,7 +786,7 @@ namespace Te1000Daemon
             var orphans = new Json.JArr();
             foreach (AlyStream st in s.Streams) if (!matched.Contains(st.Oid)) orphans.Add(StreamModel(st, verbose));
             m["orphanStreams"] = orphans;
-            m["streamDiscovery"] = "TIAN AdiOids -> LookupTreeItemById(0, oid) with ItemType 102";
+            m["streamDiscovery"] = "TIAN AdiOids -> LookupTreeItemById(0, oid), plus TIAN context children (ItemType 103) -> streams (ItemType 102)";
             return m;
         }
 

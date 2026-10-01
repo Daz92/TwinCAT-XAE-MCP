@@ -40,6 +40,9 @@ All notable changes to this project are documented here. The format is based on
   written to the stream item (a `SamplingDivider` edit was silently undone live).
 
 ### Fixed
+- `analytics_get` / `analytics_set` find streams created in the XAE GUI since the last TIAN recalc:
+  besides the TIAN `AdiOids` list they walk TIAN's context children (ItemType 103) and their
+  streams (ItemType 102), keyed by the stream's own `AnalyticsStream/@Oid`.
 - `plc_pou replace` accepts `replaceWith: ""` (deletes the match); only a missing value is rejected.
 - Child enumeration no longer trusts a `ChildCount` of 0: `tc_tree children`, reported
   `childCount`, the link walk (`tc_link get`) and child-name checks fall back to the COM
