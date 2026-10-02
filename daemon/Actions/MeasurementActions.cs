@@ -1131,13 +1131,9 @@ namespace Te1000Daemon
             parent.DeleteChild(st.Name);
             ctx.Cache.Invalidate("TIAN");
             Json.JObj r = Finish(sm, ctx.Payload, beforeFlat, null, result);
-            bool gone = false;
-            foreach (object o in (Json.JArr)r["diff"])
-            {
-                Json.JObj d = (Json.JObj)o;
-                if (d.Str("key") == "stream[" + st.Oid + "].Name" && d["after"] == null) gone = true;
-            }
-            r["verified"] = gone;
+            // Diff collapses a removed stream to one "stream[<oid>]" entry, so check
+            // the post-settle read (_lastSeen) directly.
+            r["verified"] = !_lastSeen.ContainsKey("stream[" + st.Oid + "].Name");
             return r;
         }
 
