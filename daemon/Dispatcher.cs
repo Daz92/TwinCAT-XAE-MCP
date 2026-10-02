@@ -501,6 +501,8 @@ namespace Te1000Daemon
                 "measurement_scope_record", "twincat_route_broadcast_search",
                 "plc_library_scan", "twincat_rescan_plc_project",
                 "twincat_scan_io_boxes", "twincat_license_activate_response",
+                "xae_open_solution", "twincat_save_solution_archive", "twincat_save_plc_archive",
+                "plc_project_plcopen_export", "plc_project_plcopen_import", "plc_project_save_as_library",
             };
 
         private static int TimeoutFor(string action, Json.JObj payload)
