@@ -380,7 +380,8 @@ namespace Te1000Daemon
         // Every write is read-modify-write of the FULL produced XML inside the
         // daemon (a partial TIAN ConsumeXml replaced the whole Config and wiped all
         // targets). Credentials never leave the daemon: MQTT settings are redacted
-        // to a whitelist on every output. All write paths are UNVERIFIED live.
+        // to a whitelist on every output. Verified live: logger_enable, target_add,
+        // target_edit, context_hide. stream_add and stream_remove are not.
 
         private const string RedactedValue = "<redacted>";
         private static readonly string[] MqttSafeLeaves = new string[] {
@@ -1099,7 +1100,22 @@ namespace Te1000Daemon
             }
             result["created"] = ComHelpers.ConvertTreeItem(child);
             ctx.Cache.Invalidate("TIAN");
-            return Finish(sm, p, beforeFlat, null, result);
+            Json.JObj r = Finish(sm, p, beforeFlat, null, result);
+            // Verified = a stream OID absent before is present, under this
+            // context and with this name, in the post-settle read (_lastSeen).
+            string newOid = null;
+            foreach (var kv in _lastSeen)
+            {
+                if (!kv.Key.StartsWith("stream[", StringComparison.Ordinal) || !kv.Key.EndsWith("].Name", StringComparison.Ordinal)) continue;
+                if (beforeFlat.ContainsKey(kv.Key) || kv.Value[0] != name) continue;
+                string ent = kv.Key.Substring(0, kv.Key.Length - ".Name".Length);
+                string[] caller;
+                if (!_lastSeen.TryGetValue(ent + ".CallerOid", out caller) || caller[0] != callerOid) continue;
+                newOid = ent.Substring("stream[".Length, ent.Length - "stream[".Length - 1);
+            }
+            r["streamOid"] = newOid;
+            r["verified"] = newOid != null;
+            return r;
         }
 
         // stream_remove (unverified live): DeleteChild(<stream name>) on the
