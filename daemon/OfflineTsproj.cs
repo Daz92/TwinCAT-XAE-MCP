@@ -28,6 +28,7 @@ namespace Te1000Daemon
             public string SolutionPath;
             public string TsprojPath;
             public string ProjectName;
+            public object Project;
             public List<string> Unsaved = new List<string>();
             public string Mode;
         }
@@ -42,18 +43,19 @@ namespace Te1000Daemon
             if (string.IsNullOrWhiteSpace(plan.SolutionPath)) throw new BridgeException("No solution is open");
             NoteUnsaved(plan, "solution " + plan.SolutionPath, delegate { return dte.Solution.Saved; });
 
-            // Project.Saved is not authoritative: live, the .tsproj read Saved=true
-            // while its Project.Save still wrote the nested .plcproj. PLC changes made
-            // without an open editor are therefore invisible here, and reopen mode's
-            // Solution.Close(false) would drop them; callers are told to save_all first.
+            // Project.Saved is not authoritative for the .tsproj: live, it read
+            // Saved=true while its Project.Save still wrote the nested .plcproj.
+            // Apply therefore saves the .tsproj project (and with it the nested PLC
+            // projects) before unloading or closing, so it is not checked here;
+            // every other project still has to be saved by the user.
             var all = new List<dynamic>();
             XaeActions.CollectProjects(dte.Solution.Projects, all);
             var tsprojs = new List<dynamic>();
             foreach (dynamic p in all)
             {
                 string full = ComHelpers.SafeStr(delegate { return p.FullName; });
+                if (full != null && full.EndsWith(".tsproj", StringComparison.OrdinalIgnoreCase)) { tsprojs.Add(p); continue; }
                 NoteUnsaved(plan, "project " + (ComHelpers.SafeStr(delegate { return p.UniqueName; }) ?? full), delegate { return p.Saved; });
-                if (full != null && full.EndsWith(".tsproj", StringComparison.OrdinalIgnoreCase)) tsprojs.Add(p);
             }
             int docs = ComHelpers.SafeInt(delegate { return dte.Documents.Count; });
             for (int i = 1; i <= docs; i++)
@@ -65,6 +67,7 @@ namespace Te1000Daemon
             if (tsprojs.Count != 1)
                 throw new BridgeException(tsprojs.Count.ToString(CultureInfo.InvariantCulture) + " System Manager (.tsproj) projects are loaded; an offline edit needs exactly one.");
             dynamic sys = tsprojs[0];
+            plan.Project = sys;
             plan.TsprojPath = ComHelpers.SafeStr(delegate { return sys.FullName; });
             plan.ProjectName = ComHelpers.SafeStr(delegate { return sys.Name; });
             plan.Mode = SelectProject(dte, plan.ProjectName) && CommandAvailable(dte, "Project.UnloadProject") ? "unload" : "reopen";
@@ -74,7 +77,7 @@ namespace Te1000Daemon
         public static void AssertSaved(Plan plan)
         {
             if (plan.Unsaved.Count == 0) return;
-            throw new BridgeException("Save the solution in XAE first; an offline .tsproj edit unloads or closes the project and never saves for you. Unsaved: " +
+            throw new BridgeException("Save these in XAE first; an offline .tsproj edit saves only the System Manager project (and its nested PLC projects) before it unloads or closes. Unsaved: " +
                 string.Join("; ", plan.Unsaved.ToArray()));
         }
 
@@ -85,6 +88,16 @@ namespace Te1000Daemon
         {
             AssertSaved(plan);
             dynamic dte = ctx.Dte(true);
+            // Save the .tsproj project first (it also writes the nested .plcproj and
+            // changed PLC files, verified live): reopen mode's Solution.Close(false)
+            // would drop them, and the edit must start from the saved file.
+            dynamic sys = plan.Project;
+            Json.JObj stampBefore = XaeActions.FileStamp(plan.TsprojPath);
+            try { sys.Save(""); }
+            catch (Exception ex) { throw new BridgeException("Project.Save failed for '" + plan.TsprojPath + "' (nothing unloaded or edited): " + ex.Message); }
+            result["savedBeforeClose"] = true;
+            result["tsprojBeforeSave"] = stampBefore;
+            result["tsprojAfterSave"] = XaeActions.FileStamp(plan.TsprojPath);
             byte[] original = File.ReadAllBytes(plan.TsprojPath);
             string backup = plan.TsprojPath + ".te1000-" + DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture) + ".bak";
             File.Copy(plan.TsprojPath, backup, false);

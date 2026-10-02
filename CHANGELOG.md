@@ -38,10 +38,12 @@ All notable changes to this project are documented here. The format is based on
   TIAN XML is a projection of TF3500's managed model: its recalc imports targets
   add/update-only and republishes them (a removed target came back live), and it
   overwrites stream `Config` written to the stream item (a `SamplingDivider` edit was
-  silently undone live). So the daemon requires the solution, every project and every open
-  document to be saved (it never saves), unloads the System Manager project
-  (`Project.UnloadProject`, mode `unload`) or closes the solution (mode `reopen`), backs the
-  file up as `<name>.tsproj.te1000-<UTC>.bak`, changes only the edited element's bytes
+  silently undone live). So the daemon saves the System Manager project (`Project.Save`, which
+  also writes the nested `.plcproj` and changed PLC files; `savedBeforeClose` with before/after
+  stamps), requires the solution, every other project and every open document to be saved,
+  unloads the System Manager project (`Project.UnloadProject`, mode `unload`) or closes the
+  solution (mode `reopen`), backs the file up as `<name>.tsproj.te1000-<UTC>.bak`, changes only
+  the edited element's bytes
   (checked against a DOM edit first; encoding, BOM and line endings kept), and reloads or
   reopens whatever happened. `target_remove` (`targetId`, delete-guarded) is refused while a
   stream uses the target; `stream_edit` (`streamOid`, `fields` = stream `Config` leaves,
@@ -103,8 +105,11 @@ All notable changes to this project are documented here. The format is based on
 - `xae save_project` on a PLC project nested in the `.tsproj` (PLC name or `.plcproj` path)
   refuses naming the owning `.tsproj` to save instead; it used to list the solution projects only.
   EnvDTE `Project.Saved` is not authoritative (live: the `.tsproj` read saved while its save wrote
-  the `.plcproj` too); `saved` stays judged by file stamps, and the offline `.tsproj` edit's
-  saved-state check cannot see nested PLC changes made without an open editor, so `save_all` first.
+  the `.plcproj` too); `saved` stays judged by file stamps.
+- Offline `analytics_set` `target_remove` / `stream_edit` save the `.tsproj` project before
+  unloading or closing (`savedBeforeClose`). Its `Project.Saved` misses nested PLC changes made
+  without an open editor, which `reopen`'s `Solution.Close(false)` dropped. Other unsaved
+  projects (HMI etc.) are still refused.
 - `tc_link link_batch` refuses, before calling the daemon, any `links[]` entry without `b`.
 - `xae save_project` reports `saved` when the project file or any project file under its directory
   (`.xti`, `.plcproj`, `.TcPOU`, ...) changed, with `savedFiles` and EnvDTE `Project.Saved`

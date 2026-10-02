@@ -316,13 +316,14 @@ since the daemon's last read (`driftSinceLastCall`); re-read with `analytics_get
 `stream_edit` (`streamOid`, `fields` = stream `Config` leaves, `symbols` = the full symbol
 list) cannot go through `ConsumeXml`: the TF3500 model behind `TIAN` never deletes targets
 it has seen and overwrites stream settings written to the stream item. They edit the saved
-`.tsproj` on disk instead, while XAE does not hold it: the solution, every project and every
-open document must be saved (the call refuses and lists what is not; EnvDTE `Project.Saved`
-stays true over unsaved nested PLC changes made without an open editor, which `reopen`'s
-`Solution.Close(false)` would drop, so run `save_all` first), then the System
-Manager project is unloaded (`Project.UnloadProject`) or, if that is unavailable, the
-solution is closed, the file is edited (backup `<name>.tsproj.te1000-<UTC>.bak`, only the
-edited element's bytes change) and the project is reloaded or the solution reopened. The
+`.tsproj` on disk instead, while XAE does not hold it: the solution, every other project and
+every open document must be saved (the call refuses and lists what is not). The System Manager
+project itself is saved by the call (`Project.Save`, which also writes the nested `.plcproj` and
+changed PLC files that EnvDTE `Project.Saved` does not report), reported as `savedBeforeClose`
+with `tsprojBeforeSave` / `tsprojAfterSave` stamps; then it is unloaded
+(`Project.UnloadProject`) or, if that is unavailable, the solution is closed, the file is
+edited (backup `<name>.tsproj.te1000-<UTC>.bak`, only the edited element's bytes change) and the project is reloaded or
+the solution reopened. The
 result reports `mode` (`unload` | `reopen`), `backup`, `plannedDiff` and `verified`; a
 `dryRun` reports the mode and whether the edit applies, touching nothing. Do not use `tc_tree set_xml` on
 `TIAN`: a partial `ConsumeXml` replaces the whole `Config`, and echoing
