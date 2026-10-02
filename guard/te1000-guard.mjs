@@ -46,6 +46,10 @@ const ASK_ACTIONS = {
   tc_system: ["set_netid"],
 };
 
+// analytics_set ops that unload/reload the System Manager project or close/reopen the
+// solution to edit the .tsproj on disk. A dryRun touches nothing and passes.
+const OFFLINE_ANALYTICS_OPS = ["target_remove", "stream_edit"];
+
 const DELETE_TOKEN = "ALLOW_TWINCAT_DELETE";
 
 // Actions that only read. Everything else is treated as an engineering write.
@@ -120,6 +124,8 @@ export function decide(input, { lockFile, now = Date.now() } = {}) {
     result = { decision: "ask", reason: "te1000 guard: this call deletes XAE configuration; confirm with the user." };
   } else if (ASK_ACTIONS[tool]?.includes(action)) {
     result = { decision: "ask", reason: `te1000 guard: ${tool} ${action} can affect what reaches the target; confirm with the user.` };
+  } else if (tool === "tc_measurement" && action === "analytics_set" && OFFLINE_ANALYTICS_OPS.includes(args.op) && args.dryRun !== true) {
+    result = { decision: "ask", reason: `te1000 guard: analytics_set ${args.op} unloads the System Manager project (or closes the solution) to edit the .tsproj on disk; confirm with the user.` };
   }
   if (found && result.decision === "allow") {
     for (const rule of found.policy.ask ?? []) {

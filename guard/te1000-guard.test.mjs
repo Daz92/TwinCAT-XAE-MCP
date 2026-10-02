@@ -73,6 +73,14 @@ test("dialog_resolve and set_netid ask, scan_io_boxes is denied", () => {
   assert.equal(decide(call("tc_system", { action: "scan_io_boxes" })).decision, "deny");
 });
 
+test("offline analytics_set ops ask unless dryRun; other ops pass", () => {
+  const set = (input) => decide(call("tc_measurement", { action: "analytics_set", ...input })).decision;
+  assert.equal(set({ op: "stream_edit", streamOid: "0x1" }), "ask");
+  assert.equal(set({ op: "target_remove", targetId: "g", confirm: "ALLOW_TWINCAT_DELETE" }), "ask");
+  assert.equal(set({ op: "stream_edit", dryRun: true }), "allow");
+  assert.equal(set({ op: "target_edit", targetId: "g" }), "allow");
+});
+
 test("an ask does not take the write lock; a missing session id is denied", () => {
   const lockFile = join(tmp(), "write.lock");
   assert.equal(decide(call("xae", { action: "dialog_resolve" }, { session: "A" }), { lockFile, now: 0 }).decision, "ask");

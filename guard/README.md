@@ -14,6 +14,7 @@ that boundary deterministic. It needs only Node 20+ and has no dependencies.
 | `tc_system scan_io_boxes` (talks to the live EtherCAT master) | deny |
 | a call with `confirm: "ALLOW_TWINCAT_DELETE"` | ask the user |
 | `xae dialog_resolve` (clicks a button on whatever XAE dialog is open), `tc_system set_netid` | ask the user |
+| `tc_measurement analytics_set` with `op` `target_remove` or `stream_edit`, unless `dryRun` (unloads the project or closes the solution to edit the `.tsproj`) | ask the user |
 | a rule in the repository's `.te1000-policy.json` | deny or ask, as the rule says |
 | any engineering write while another agent session wrote in the last 10 minutes | deny (write lock) |
 | everything else | allow |
