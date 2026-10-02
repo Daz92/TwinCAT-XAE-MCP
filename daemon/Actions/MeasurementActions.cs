@@ -375,13 +375,16 @@ namespace Te1000Daemon
         //    target removed from the XML returns on the next model republish, and a
         //    stream Config written to the stream item is overwritten. The only
         //    importer of stream Config (ConfigModel.Import via the ImportConfiguration
-        //    command) opens a file dialog. target_remove and stream_edit therefore
-        //    refuse instead of writing something the model will undo.
+        //    command) opens a file dialog. target_remove and stream_edit therefore do
+        //    not go through ConsumeXml: they edit the saved .tsproj on disk while the
+        //    project is unloaded (or the solution closed) and TF3500 rebuilds its
+        //    model from the file on load (OfflineTsproj; proven live 2026-10-01).
         // Every write is read-modify-write of the FULL produced XML inside the
         // daemon (a partial TIAN ConsumeXml replaced the whole Config and wiped all
         // targets). Credentials never leave the daemon: MQTT settings are redacted
         // to a whitelist on every output. Verified live: logger_enable, target_add,
-        // target_edit, context_hide. stream_add and stream_remove are not.
+        // target_edit, context_hide. stream_add, stream_remove and the offline
+        // target_remove/stream_edit paths are not.
 
         private const string RedactedValue = "<redacted>";
         private static readonly string[] MqttSafeLeaves = new string[] {
@@ -913,6 +916,8 @@ namespace Te1000Daemon
 
             if (op == "stream_add") return StreamAdd(ctx, sm, before, result);
             if (op == "stream_remove") return StreamRemove(ctx, sm, before, result);
+            if (op == "target_remove") return TargetRemoveOffline(ctx, before, result);
+            if (op == "stream_edit") return StreamEditOffline(ctx, before, result);
 
             XmlDocument planned = null;       // TIAN plan
             switch (op)
@@ -966,10 +971,6 @@ namespace Te1000Daemon
                     result["newTargetId"] = newId;
                     break;
                 }
-                case "target_remove":
-                    throw new BridgeException("target_remove is not supported through the Automation Interface: TF3500's ConfigModel only adds/updates stream targets " +
-                        "from the TIAN XML (ImportStreamTargets) and republishes its full target list on the next recalc, so a removed target comes back " +
-                        "(seen live: a removed clone reappeared after the next Analytics write). Delete the target in XAE: Analytics > Stream Targets tab.");
                 case "context_hide":
                 {
                     if (!p.Has("hide")) throw new BridgeException("hide is required");
@@ -979,12 +980,8 @@ namespace Te1000Daemon
                     mode = "visibleOnly"; // the listed set IS the selected-source set
                     break;
                 }
-                case "stream_edit":
-                    throw new BridgeException("stream_edit is not supported through the Automation Interface: stream settings live in TF3500's StreamModel, " +
-                        "which republishes its own Config over the stream item on every recalc (a ConsumeXml there is silently undone, seen live) and has no " +
-                        "settings command; the only importer is the GUI Import Configuration dialog. Edit the stream in XAE: stream > Data Handling tab.");
                 default:
-                    throw new BridgeException("Unknown op '" + op + "'. Expected logger_enable|target_add|target_edit|context_hide|stream_add|stream_remove.");
+                    throw new BridgeException("Unknown op '" + op + "'. Expected logger_enable|target_add|target_edit|target_remove|context_hide|stream_add|stream_edit|stream_remove.");
             }
 
             var beforeFlat = FlattenAll(before.TianDoc, before.Streams);
@@ -1134,6 +1131,233 @@ namespace Te1000Daemon
             // Diff collapses a removed stream to one "stream[<oid>]" entry, so check
             // the post-settle read (_lastSeen) directly.
             r["verified"] = !_lastSeen.ContainsKey("stream[" + st.Oid + "].Name");
+            return r;
+        }
+
+        // ---- target_remove / stream_edit: offline .tsproj edit ---------------
+        // TF3500's model never drops a target that TIAN XML omits and republishes
+        // stream Config over the stream item, so these two ops edit the .tsproj on
+        // disk while XAE does not hold it (OfflineTsproj) and let TF3500 rebuild its
+        // model from the file on load. Disk layout (element names only):
+        //   TcSmProject/Project/Analytics/Config/StreamTargets/StreamTargetItem[@Id]
+        //   TcSmProject/Project/Analytics/StreamContext[@CallerOid]/Stream[@Id,@oid]/Config/<field>
+        private const string DiskAnalytics = "/TcSmProject/Project/Analytics";
+        private static readonly System.Text.RegularExpressions.Regex FieldName =
+            new System.Text.RegularExpressions.Regex("^[A-Za-z_][A-Za-z0-9_]*$");
+
+        private static Json.JObj TargetRemoveOffline(ActionContext ctx, AlySnapshot before, Json.JObj result)
+        {
+            string id = NormGuid(ctx.Require("targetId"));
+            FindTarget(before.TianDoc, id);
+            var users = new List<string>();
+            foreach (AlyStream st in before.Streams) if (StreamTargetId(st) == id) users.Add(st.Oid);
+            if (users.Count > 0)
+            {
+                throw new BridgeException("Stream target " + id + " is in use by stream(s) " + string.Join(", ", users.ToArray()) +
+                    "; point them at another target first (stream_edit fields.TargetId).");
+            }
+
+            var beforeFlat = FlattenAll(before.TianDoc, before.Streams);
+            string prefix = "target[" + id + "]";
+            var plannedFlat = new Dictionary<string, string[]>();
+            foreach (var kv in beforeFlat) if (!kv.Key.StartsWith(prefix, StringComparison.Ordinal)) plannedFlat[kv.Key] = kv.Value;
+            result["targetId"] = id;
+
+            Func<string, string> edit = delegate(string t)
+            {
+                string xpath = DiskAnalytics + "/Config/StreamTargets/StreamTargetItem";
+                List<XmlElement> items = Elements(OfflineTsproj.LoadDom(t), xpath);
+                int k = -1;
+                for (int i = 0; i < items.Count; i++)
+                {
+                    if (NormGuid(items[i].GetAttribute("Id")) != id) continue;
+                    if (k >= 0) throw new BridgeException("Stream target " + id + " appears twice in the .tsproj");
+                    k = i;
+                }
+                if (k < 0) throw new BridgeException("Stream target " + id + " is not in the .tsproj");
+                OfflineTsproj.Span a = OfflineTsproj.Root(t, "Analytics");
+                OfflineTsproj.Span targets = OfflineTsproj.Child(t, OfflineTsproj.Child(t, a, "Config", 0), "StreamTargets", 0);
+                string edited = OfflineTsproj.RemoveElement(t, OfflineTsproj.Child(t, targets, "StreamTargetItem", k));
+                OfflineTsproj.AssertPlanned(t, edited, delegate(XmlDocument d)
+                {
+                    XmlNode e = d.SelectNodes(xpath)[k];
+                    e.ParentNode.RemoveChild(e);
+                });
+                return edited;
+            };
+            return RunOffline(ctx, result, beforeFlat, plannedFlat, edit, delegate(Dictionary<string, string[]> after)
+            {
+                foreach (string key in after.Keys) if (key.StartsWith(prefix, StringComparison.Ordinal)) return false;
+                return true;
+            });
+        }
+
+        private static Json.JObj StreamEditOffline(ActionContext ctx, AlySnapshot before, Json.JObj result)
+        {
+            Json.JObj p = ctx.Payload;
+            AlyStream st = FindStream(before, p);
+            var edits = new List<KeyValuePair<string[], string>>();
+            Json.JObj fields = p.Obj("fields");
+            if (fields != null) FieldEdits(fields, new List<string>(), edits);
+            List<string> symbols = null;
+            if (p.Arr("symbols") != null)
+            {
+                symbols = new List<string>();
+                foreach (object o in p.Arr("symbols")) symbols.Add(Convert.ToString(o, CultureInfo.InvariantCulture));
+                edits.Add(new KeyValuePair<string[], string>(new string[] { "SymbolNames" }, EncodeSymbols(symbols)));
+            }
+            if (edits.Count == 0) throw new BridgeException("fields or symbols is required");
+
+            var beforeFlat = FlattenAll(before.TianDoc, before.Streams);
+            var plannedFlat = new Dictionary<string, string[]>(beforeFlat);
+            var planned = new Dictionary<string, string>(); // flat key -> planned raw value
+            for (int i = 0; i < edits.Count; i++)
+            {
+                string[] path = edits[i].Key;
+                string value = edits[i].Value;
+                if (path.Length == 1 && path[0] == "TargetId")
+                {
+                    value = NormGuid(value);
+                    FindTarget(before.TianDoc, value);
+                    edits[i] = new KeyValuePair<string[], string>(path, value);
+                }
+                string key = "stream[" + st.Oid + "]." + string.Join(".", path);
+                string raw = path.Length == 1 && path[0] == "SymbolNames" ? string.Join(",", symbols.ToArray()) : value;
+                string[] old;
+                bool secret = beforeFlat.TryGetValue(key, out old) && old[1] == RedactedValue;
+                plannedFlat[key] = new string[] { raw, secret ? RedactedValue : raw };
+                planned[key] = raw;
+            }
+            result["streamOid"] = st.Oid;
+
+            Func<string, string> edit = delegate(string t)
+            {
+                int[] at = LocateDiskStream(OfflineTsproj.LoadDom(t), st, result);
+                string edited = t;
+                foreach (var e in edits)
+                {
+                    OfflineTsproj.Span a = OfflineTsproj.Root(edited, "Analytics");
+                    OfflineTsproj.Span s = OfflineTsproj.Child(edited, OfflineTsproj.Child(edited, a, "StreamContext", at[0]), "Stream", at[1]);
+                    OfflineTsproj.Span cur = OfflineTsproj.Child(edited, s, "Config", 0);
+                    foreach (string part in e.Key) cur = OfflineTsproj.Child(edited, cur, part, 0);
+                    edited = OfflineTsproj.SetLeaf(edited, cur, e.Value);
+                }
+                OfflineTsproj.AssertPlanned(t, edited, delegate(XmlDocument d)
+                {
+                    XmlNode stream = d.SelectNodes(DiskAnalytics + "/StreamContext")[at[0]].SelectNodes("Stream")[at[1]];
+                    foreach (var e in edits)
+                    {
+                        XmlElement cur = (XmlElement)stream.SelectSingleNode("Config");
+                        foreach (string part in e.Key) cur = (XmlElement)cur.SelectSingleNode(part);
+                        // SetLeaf keeps <X/> for an empty value; so does the plan.
+                        if (e.Value.Length == 0 && cur.IsEmpty) continue;
+                        cur.InnerText = e.Value;
+                    }
+                });
+                return edited;
+            };
+            return RunOffline(ctx, result, beforeFlat, plannedFlat, edit, delegate(Dictionary<string, string[]> after)
+            {
+                foreach (var kv in planned)
+                {
+                    string[] got;
+                    if (!after.TryGetValue(kv.Key, out got)) return false;
+                    bool same = kv.Key.EndsWith(".TargetId", StringComparison.Ordinal) ? NormGuid(got[0]) == kv.Value : got[0] == kv.Value;
+                    if (!same) return false;
+                }
+                return true;
+            });
+        }
+
+        // The stream's element on disk: the Stream whose @Id or @oid is the live OID,
+        // else the one Stream with the live name under the context with its CallerOid
+        // (a live OID resolved through TIAN AdiOids need not be the element's own).
+        private static int[] LocateDiskStream(XmlDocument dom, AlyStream st, Json.JObj result)
+        {
+            List<XmlElement> contexts = Elements(dom, DiskAnalytics + "/StreamContext");
+            int[] byOid = null;
+            int[] byName = null;
+            int nameHits = 0;
+            for (int ci = 0; ci < contexts.Count; ci++)
+            {
+                List<XmlElement> streams = Elements(contexts[ci], "Stream");
+                for (int si = 0; si < streams.Count; si++)
+                {
+                    XmlElement s = streams[si];
+                    if (NormOid(s.GetAttribute("Id")) == st.Oid || NormOid(s.GetAttribute("oid")) == st.Oid)
+                    {
+                        if (byOid != null) throw new BridgeException("Stream " + st.Oid + " appears twice in the .tsproj");
+                        byOid = new int[] { ci, si };
+                    }
+                    if (NormOid(contexts[ci].GetAttribute("CallerOid")) == st.CallerOid && Text(s, "Name") == st.Name)
+                    {
+                        byName = new int[] { ci, si };
+                        nameHits++;
+                    }
+                }
+            }
+            if (byOid != null) { result["diskMatch"] = "oid"; return byOid; }
+            if (nameHits == 1) { result["diskMatch"] = "callerOid+name"; return byName; }
+            throw new BridgeException("Stream " + st.Oid + " ('" + st.Name + "') is not " + (nameHits > 1 ? "unique" : "present") + " in the .tsproj");
+        }
+
+        // fields {A: v, "B.C": v, D: {E: v}} -> (element path under the stream Config, text).
+        private static void FieldEdits(Json.JObj values, List<string> prefix, List<KeyValuePair<string[], string>> into)
+        {
+            foreach (var kv in values)
+            {
+                var path = new List<string>(prefix);
+                foreach (string part in kv.Key.Split('.'))
+                {
+                    if (!FieldName.IsMatch(part)) throw new BridgeException("Invalid field name '" + kv.Key + "'");
+                    path.Add(part);
+                }
+                Json.JObj nested = kv.Value as Json.JObj;
+                if (nested != null) { FieldEdits(nested, path, into); continue; }
+                string leaf = path[path.Count - 1];
+                if (leaf.EndsWith("Crypted", StringComparison.Ordinal)) throw new BridgeException("'" + string.Join(".", path.ToArray()) + "' is an XAE-encrypted value and cannot be set.");
+                if (path.Count == 1 && leaf == "SymbolNames") throw new BridgeException("Set SymbolNames through symbols (a list of symbol names), not fields.");
+                into.Add(new KeyValuePair<string[], string>(path.ToArray(), XmlValue(kv.Value)));
+            }
+        }
+
+        // TF3500's SymbolNames: base64 of the UTF-8 names, each followed by a NUL.
+        private static string EncodeSymbols(List<string> names)
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (string n in names)
+            {
+                if (n.Length == 0 || n.IndexOf('\0') >= 0) throw new BridgeException("symbols must be non-empty names without NUL");
+                sb.Append(n).Append('\0');
+            }
+            return Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(sb.ToString()));
+        }
+
+        // dryRun: plannedDiff, the mode, and the text edit run against the file in
+        // memory (nothing is written, unloaded or closed). Otherwise the offline
+        // edit, then the usual settled re-read; verified = applied(settled state).
+        private static Json.JObj RunOffline(ActionContext ctx, Json.JObj result, Dictionary<string, string[]> beforeFlat,
+            Dictionary<string, string[]> plannedFlat, Func<string, string> edit, Func<Dictionary<string, string[]>, bool> applied)
+        {
+            result["plannedDiff"] = Diff(beforeFlat, plannedFlat);
+            OfflineTsproj.Plan plan = OfflineTsproj.Prepare(ctx);
+            result["mode"] = plan.Mode;
+            result["tsproj"] = plan.TsprojPath;
+            if (IsDryRun(ctx.Payload))
+            {
+                if (plan.Unsaved.Count > 0) result["unsaved"] = new Json.JArr(plan.Unsaved.Cast<object>());
+                else
+                {
+                    bool bom;
+                    edit(OfflineTsproj.Decode(File.ReadAllBytes(plan.TsprojPath), out bom));
+                }
+                result["fileEditChecked"] = plan.Unsaved.Count == 0;
+                result["written"] = false;
+                return result;
+            }
+            dynamic sm = OfflineTsproj.Apply(ctx, plan, edit, result);
+            Json.JObj r = Finish(sm, ctx.Payload, beforeFlat, plannedFlat, result);
+            r["verified"] = applied(_lastSeen);
             return r;
         }
 

@@ -532,6 +532,9 @@ namespace Te1000Daemon
             // Long-running ops keep the legacy infinite wait absent an explicit
             // override; ordinary fast COM calls get the finite safety ceiling.
             if (action != null && LongRunningActions.Contains(action)) return 0;
+            // These two unload/reload or close/reopen the System Manager project.
+            if (action == "analytics_config_set" && !payload.Bool("dryRun", false) &&
+                (payload.Str("op") == "target_remove" || payload.Str("op") == "stream_edit")) return 0;
             return DefaultTimeoutMs;
         }
 

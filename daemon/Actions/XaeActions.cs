@@ -487,7 +487,7 @@ namespace Te1000Daemon
         // failing Projects.Item(i) is an error, not a silently skipped project.
         private const string SolutionFolderKind = "{66A26720-8FB5-11D2-AA7E-00C04F688DDE}";
 
-        private static void CollectProjects(dynamic projects, List<dynamic> into)
+        internal static void CollectProjects(dynamic projects, List<dynamic> into)
         {
             int count = ComHelpers.SafeInt(delegate { return projects.Count; });
             for (int i = 1; i <= count; i++)

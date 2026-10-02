@@ -115,6 +115,7 @@
     <Compile Include="PathUtil.cs" />
     <Compile Include="ComHelpers.cs" />
     <Compile Include="PlcProjectHelper.cs" />
+    <Compile Include="OfflineTsproj.cs" />
     <Compile Include="PipeServer.cs" />
     <Compile Include="Dispatcher.cs" />
     <Compile Include="Actions\ActionContext.cs" />
