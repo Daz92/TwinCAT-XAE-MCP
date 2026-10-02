@@ -945,12 +945,6 @@ server.registerTool(
           callerOid: p.callerOid, hide: p.hide, stream: p.stream, streamOid: p.streamOid,
           name: p.name, subType: p.subType, acceptDrift: p.acceptDrift === true, settleMs: p.settleMs,
         }));
-      case "node_get_xml":
-        need(p, ["path"], p.action);
-        return textResult(await bridgeCall("twincat_get_tree_item_xml", { ...base, treePath: p.path, summary: p.summary === true }));
-      case "node_set_xml":
-        need(p, ["path", "xml"], p.action);
-        return textResult(await bridgeCall("twincat_set_tree_item_xml", { ...base, treePath: p.path, xml: p.xml, returnXml: p.returnXml === true }));
     }
   },
 );
