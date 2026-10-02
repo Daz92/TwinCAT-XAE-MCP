@@ -25,8 +25,8 @@ const CONNECT_TIMEOUT_MS = Number(process.env.TE1000_DAEMON_CONNECT_MS) || 20000
 // Per-request ceiling: once a frame is written, the pending id waits for a
 // matching response. Without this, a wedged daemon (or a dropped/malformed reply
 // frame that never matches the id) would hang the request forever. The daemon's
-// own per-call ceiling is ~180s and long actions carry their own larger
-// timeoutMs; keep this Node-side wall comfortably above that so we don't pre-empt
+// own per-call ceiling is 180 s, 15 min for its long-running actions, unless the
+// call carries its own timeoutMs; keep this Node-side wall above that so we don't pre-empt
 // a daemon call that is legitimately still running. 0 disables (parity escape).
 const REQUEST_TIMEOUT_MS = Number(process.env.TE1000_DAEMON_REQUEST_MS) || 1900000;
 
