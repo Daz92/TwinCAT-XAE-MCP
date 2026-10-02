@@ -439,6 +439,7 @@ namespace Te1000Daemon
                     : string.Equals(unique, wanted, StringComparison.OrdinalIgnoreCase) || string.Equals(name, wanted, StringComparison.OrdinalIgnoreCase);
                 if (hit) matches.Add(p);
             }
+            if (matches.Count == 0) RefuseNestedPlc(ctx, all, byPath ? System.IO.Path.GetFileNameWithoutExtension(wanted) : wanted, wanted);
             if (matches.Count != 1)
                 throw new BridgeException((matches.Count == 0 ? "No" : matches.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)) +
                     " project(s) match '" + wanted + "' (nothing saved). Projects: " + string.Join(", ", names.ToArray()));
@@ -479,6 +480,33 @@ namespace Te1000Daemon
             data["after"] = after;
             data["solution"] = openSolution;
             return data;
+        }
+
+        // A PLC project lives under TIPC of the System Manager project, not in
+        // Solution.Projects, and its tree item has no Save. When `key` names one
+        // (PLC root or nested project name, or the .plcproj file name), refuse
+        // naming the owning .tsproj, whose Project.Save also writes the PLC files.
+        private static void RefuseNestedPlc(ActionContext ctx, List<dynamic> all, string key, string wanted)
+        {
+            string owner = null;
+            foreach (dynamic p in all)
+            {
+                string full = ComHelpers.SafeStr(delegate { return p.FullName; });
+                if (full != null && full.EndsWith(".tsproj", StringComparison.OrdinalIgnoreCase))
+                    owner = ComHelpers.SafeStr(delegate { return p.UniqueName; }) ?? full;
+            }
+            if (owner == null) return;
+            dynamic tipc = ComHelpers.TryGetTreeItem(ctx.SysManager(), "TIPC");
+            if (tipc == null) return;
+            foreach (dynamic plc in ComHelpers.Children(tipc))
+            {
+                string name = ComHelpers.SafeStr(delegate { return plc.Name; });
+                string nested = PlcProjectHelper.GetNestedProjectName((object)plc);
+                if (string.Equals(key, name, StringComparison.OrdinalIgnoreCase) || string.Equals(key, nested, StringComparison.OrdinalIgnoreCase))
+                    throw new BridgeException("'" + wanted + "' is the PLC project '" + name + "' nested in '" + owner +
+                        "'; EnvDTE exposes no Project for it, so it cannot be saved on its own (nothing saved). " +
+                        "Save '" + owner + "' instead: its Project.Save also writes the nested .plcproj and changed PLC files.");
+            }
         }
 
         // Solution.Projects plus nested projects: solution-folder members and any
