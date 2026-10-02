@@ -43,17 +43,14 @@ namespace Te1000Daemon
         {
             dynamic sm = ctx.SysManager();
             dynamic tirt = ctx.Cache.LookupItem(sm, "TIRT");
-            int count = ComHelpers.ChildCount(tirt);
             var tasks = new Json.JArr();
-            for (int i = 1; i <= count; i++)
+            foreach (dynamic child in ComHelpers.Children(tirt))
             {
-                dynamic child = ComHelpers.Child(tirt, i);
-                if (child == null) continue;
                 tasks.Add(ComHelpers.ConvertTreeItem(child));
             }
 
             var data = new Json.JObj();
-            data["count"] = count;
+            data["count"] = tasks.Count;
             data["tasks"] = tasks;
             return data;
         }
@@ -573,11 +570,8 @@ namespace Te1000Daemon
             {
                 projectPaths.Add(plcPath + "^" + rootName + " Project");
             }
-            int rootChildCount = ComHelpers.ChildCount(root);
-            for (int ri = 1; ri <= rootChildCount; ri++)
+            foreach (dynamic rc in ComHelpers.Children(root))
             {
-                dynamic rc = ComHelpers.Child(root, ri);
-                if (rc == null) continue;
                 string rcn = ComHelpers.SafeStr(delegate { return rc.Name; });
                 if (string.IsNullOrWhiteSpace(rcn)) continue;
                 string rcp = plcPath + "^" + rcn;
@@ -594,11 +588,8 @@ namespace Te1000Daemon
                 var named = new List<string>();
                 var other = new List<string>();
 
-                int childCount = ComHelpers.ChildCount(projNode);
-                for (int ci = 1; ci <= childCount; ci++)
+                foreach (dynamic childNode in ComHelpers.Children(projNode))
                 {
-                    dynamic childNode = ComHelpers.Child(projNode, ci);
-                    if (childNode == null) continue;
                     string cn = ComHelpers.SafeStr(delegate { return childNode.Name; });
                     if (string.IsNullOrWhiteSpace(cn)) continue;
                     string cp = projPath + "^" + cn;

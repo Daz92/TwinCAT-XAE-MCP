@@ -41,12 +41,13 @@ namespace Te1000Daemon
             }
 
             dynamic motionRoot = ComHelpers.GetTreeItem(sysManager, "TINC");
-            if (ComHelpers.ChildCount(motionRoot) < 1)
+            List<dynamic> tasks = ComHelpers.Children(motionRoot);
+            if (tasks.Count < 1)
             {
                 throw new BridgeException("No NC tasks were found under TINC");
             }
 
-            dynamic firstTask = ComHelpers.Child(motionRoot, 1);
+            dynamic firstTask = tasks[0];
             string name = ComHelpers.SafeStr(delegate { return firstTask.Name; });
             if (!string.IsNullOrWhiteSpace(name))
             {
@@ -63,10 +64,8 @@ namespace Te1000Daemon
             dynamic motionRoot = ctx.Cache.LookupItem(sm, "TINC");
 
             var tasks = new Json.JArr();
-            int count = ComHelpers.ChildCount(motionRoot);
-            for (int i = 1; i <= count; i++)
+            foreach (dynamic child in ComHelpers.Children(motionRoot))
             {
-                dynamic child = ComHelpers.Child(motionRoot, i);
                 var t = new Json.JObj();
                 t["name"] = ComHelpers.SafeStr(delegate { return child.Name; });
                 t["pathName"] = ComHelpers.SafeStr(delegate { return child.PathName; });
@@ -104,10 +103,8 @@ namespace Te1000Daemon
             string axesPath = ComHelpers.SafeStr(delegate { return axesRoot.PathName; });
 
             var axes = new Json.JArr();
-            int count = ComHelpers.ChildCount(axesRoot);
-            for (int i = 1; i <= count; i++)
+            foreach (dynamic child in ComHelpers.Children(axesRoot))
             {
-                dynamic child = ComHelpers.Child(axesRoot, i);
                 var a = new Json.JObj();
                 a["name"] = ComHelpers.SafeStr(delegate { return child.Name; });
                 a["pathName"] = ComHelpers.SafeStr(delegate { return child.PathName; });
@@ -155,10 +152,9 @@ namespace Te1000Daemon
             dynamic axis = GetChildTreeItemByName(axesRoot, axisName);
 
             var children = new Json.JArr();
-            int count = ComHelpers.ChildCount(axis);
-            for (int i = 1; i <= count; i++)
+            foreach (dynamic child in ComHelpers.Children(axis))
             {
-                children.Add(ComHelpers.ConvertTreeItem(ComHelpers.Child(axis, i)));
+                children.Add(ComHelpers.ConvertTreeItem(child));
             }
 
             var data = new Json.JObj();
@@ -175,10 +171,8 @@ namespace Te1000Daemon
         // throw if absent. Ported inline for nc_get_axis_info.
         private static dynamic GetChildTreeItemByName(dynamic parentItem, string childName)
         {
-            int count = ComHelpers.ChildCount(parentItem);
-            for (int i = 1; i <= count; i++)
+            foreach (dynamic child in ComHelpers.Children(parentItem))
             {
-                dynamic child = ComHelpers.Child(parentItem, i);
                 string name = ComHelpers.SafeStr(delegate { return child.Name; });
                 if (name == childName)
                 {

@@ -1312,14 +1312,11 @@ namespace Te1000Daemon
         }
 
         // Get-ChildTreeItemByName equivalent: true if a direct child of the parent
-        // tree item has the given name (1-based scan). Used by analytics dry-run.
+        // tree item has the given name. Used by analytics dry-run.
         private static bool ChildExistsByName(dynamic parentItem, string childName)
         {
-            int count = ComHelpers.ChildCount(parentItem);
-            for (int i = 1; i <= count; i++)
+            foreach (dynamic child in ComHelpers.Children(parentItem))
             {
-                dynamic child = ComHelpers.Child(parentItem, i);
-                if (child == null) continue;
                 string name = ComHelpers.SafeStr(delegate { return child.Name; });
                 if (name == childName) return true;
             }

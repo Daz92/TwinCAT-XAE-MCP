@@ -238,11 +238,9 @@ namespace Te1000Daemon
 
             // Snapshot existing child names so we can report only the new imports.
             var before = new HashSet<string>(StringComparer.Ordinal);
-            int countBefore = ComHelpers.ChildCount(parentItem);
-            for (int i = 1; i <= countBefore; i++)
+            foreach (dynamic c in ComHelpers.Children(parentItem))
             {
-                dynamic c = ComHelpers.Child(parentItem, i);
-                string cn = c == null ? null : ComHelpers.SafeStr(MakeNameGetter(c));
+                string cn = ComHelpers.SafeStr(MakeNameGetter(c));
                 if (!string.IsNullOrWhiteSpace(cn)) before.Add(cn);
             }
 
@@ -254,11 +252,9 @@ namespace Te1000Daemon
             parentItem.CreateChild(null, 58, "", vInfo);
 
             var imported = new Json.JArr();
-            int countAfter = ComHelpers.ChildCount(parentItem);
-            for (int i = 1; i <= countAfter; i++)
+            foreach (dynamic c in ComHelpers.Children(parentItem))
             {
-                dynamic c = ComHelpers.Child(parentItem, i);
-                string cn = c == null ? null : ComHelpers.SafeStr(MakeNameGetter(c));
+                string cn = ComHelpers.SafeStr(MakeNameGetter(c));
                 if (!string.IsNullOrWhiteSpace(cn) && !before.Contains(cn)) imported.Add(cn);
             }
 
@@ -364,11 +360,8 @@ namespace Te1000Daemon
             object objectKind = SafeIntObj(MakeIntGetter(item, "ItemType"));
 
             var children = new Json.JArr();
-            int childCount = ComHelpers.ChildCount(item);
-            for (int ci = 1; ci <= childCount; ci++)
+            foreach (dynamic childNode in ComHelpers.Children(item))
             {
-                dynamic childNode = ComHelpers.Child(item, ci);
-                if (childNode == null) continue;
                 string cn = ComHelpers.SafeStr(MakeNameGetter(childNode));
                 if (string.IsNullOrWhiteSpace(cn)) continue;
                 object cSub = TryGetSubType(childNode);
