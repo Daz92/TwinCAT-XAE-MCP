@@ -21,6 +21,7 @@ namespace Te1000Daemon
             h["xae_execute_command"] = XaeExecuteCommand;
             h["xae_get_active_document"] = XaeGetActiveDocument;
             h["xae_get_selected_items"] = XaeGetSelectedItems;
+            h["xae_solution_explorer"] = OfflineTsproj.ListSolutionExplorer;
             h["xae_focus_tree_item"] = XaeFocusTreeItem;
             h["xae_get_error_list"] = XaeGetErrorList;
             h["xae_clear_error_list"] = XaeClearErrorList;

@@ -56,7 +56,7 @@ const DELETE_TOKEN = "ALLOW_TWINCAT_DELETE";
 
 // Actions that only read. Everything else is treated as an engineering write.
 const READ_ACTIONS = new Set([
-  "status", "error_list", "dialog_probe", "active_document", "selected_items", "list_commands",
+  "status", "error_list", "dialog_probe", "active_document", "selected_items", "solution_explorer", "list_commands",
   "get", "get_batch", "children", "exists", "exists_batch", "get_xml", "export", "focus",
   "get_decl", "get_impl", "get_document", "get_graphical", "outline", "tree", "find", "search",
   "check_objects", "info", "list", "scan", "repos", "links", "resolve", "produce",
