@@ -560,7 +560,9 @@ server.registerTool(
           expectCount: p.expectCount, validate: p.validate === true, save: p.save === true,
         }));
       case "replace_lines":
-        need(p, ["path", "start", "end", "text"], p.action);
+        need(p, ["path", "start", "end"], p.action);
+        // "" is a legal text (deletes the range); only absence is an error.
+        if (typeof p.text !== "string") throw new Error("'text' is required for action=replace_lines (\"\" deletes the range)");
         return textResult(await bridgeCall("plc_pou_replace_lines", {
           path: p.path, target: p.target, start: p.start, end: p.end, text: p.text,
           validate: p.validate === true, save: p.save === true,
