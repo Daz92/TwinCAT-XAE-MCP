@@ -139,7 +139,9 @@ namespace Te1000Daemon
             var result = _worker.Run(() =>
             {
                 var ctx = new ActionContext(action, payload, _worker.Session, _cache, _edits);
-                Json.JObj data = handler(ctx);
+                Json.JObj data = RetryReadActions.Contains(action)
+                    ? ComHelpers.WithRetry(() => handler(ctx))
+                    : handler(ctx);
                 return data ?? new Json.JObj();
             }, timeout);
 
@@ -503,6 +505,21 @@ namespace Te1000Daemon
                 "twincat_scan_io_boxes", "twincat_license_activate_response",
                 "xae_open_solution", "twincat_save_solution_archive", "twincat_save_plc_archive",
                 "plc_project_plcopen_export", "plc_project_plcopen_import", "plc_project_save_as_library",
+            };
+
+        // Read-only actions re-run on ComHelpers.IsRetryableComError. The message
+        // filter already retries SERVERCALL_RETRYLATER and cancels the rest; this
+        // covers a rejection that still surfaces as an exception.
+        // Never add a mutation here: a retry could apply it twice.
+        private static readonly System.Collections.Generic.HashSet<string> RetryReadActions =
+            new System.Collections.Generic.HashSet<string>(System.StringComparer.Ordinal)
+            {
+                "xae_status", "xae_get_error_list",
+                "plc_pou_tree", "plc_pou_find", "plc_pou_search", "plc_pou_outline",
+                "plc_pou_get_decl", "plc_pou_get_impl",
+                "analytics_config_get",
+                "twincat_lookup_tree_item", "twincat_lookup_tree_items",
+                "twincat_list_children", "twincat_get_tree_item_xml",
             };
 
         private static int TimeoutFor(string action, Json.JObj payload)
