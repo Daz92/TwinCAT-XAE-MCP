@@ -75,7 +75,12 @@ namespace Te1000Daemon
             // Same CreateChild route as create; vInfo = file path, subType selects
             // copy(0)/move(1)/use-in-place(2).
             dynamic child = tipc.CreateChild(name, subType, before, file);
-            AssertWellFormedChild(tipc, child, name, subType, "TIPC");
+            // XAE may name an opened project after its file rather than the
+            // requested name; that child is valid, so check it under its own name
+            // instead of deleting it as malformed.
+            string openedName = ComHelpers.SafeStr(delegate { return child.Name; });
+            if (string.IsNullOrWhiteSpace(openedName)) openedName = name;
+            AssertWellFormedChild(tipc, child, openedName, subType, "TIPC");
 
             if (ctx.Payload.Has("save") && ctx.Payload.Bool("save"))
             {
@@ -85,7 +90,8 @@ namespace Te1000Daemon
 
             var data = new Json.JObj();
             data["parentPath"] = "TIPC";
-            data["pathName"] = "TIPC^" + name;
+            data["pathName"] = "TIPC^" + openedName;
+            data["requestedName"] = name;
             data["subType"] = subType;
             data["child"] = ComHelpers.ConvertTreeItem(child);
             return data;
