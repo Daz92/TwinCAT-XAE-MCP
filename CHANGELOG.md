@@ -112,6 +112,9 @@ All notable changes to this project are documented here. The format is based on
 - Read-only actions (`xae status` / `error_list`, `plc_pou` tree/find/search/outline/get_decl/
   get_impl, `analytics_get`, `tc_tree` get/get_batch/children/get_xml) retry on a retryable COM
   error through `ComHelpers.WithRetry`, which had no callers. Mutations are never retried.
+- `xae save_project` passes `Project.Save`'s optional `FileName` explicitly (`""`, EnvDTE's own
+  default, a plain save under the same name). Late-bound, the omitted argument had no default, and
+  saving the TwinCAT HMI project failed with `Missing parameter does not have a default value.`
 
 ### Verified live
 - `plc_pou create` for the cases that failed with 603, 604, extends, 608, 609 (with and without

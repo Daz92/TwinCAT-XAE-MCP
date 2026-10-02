@@ -450,7 +450,10 @@ namespace Te1000Daemon
             string dir = System.IO.Path.GetDirectoryName(file);
             Dictionary<string, DateTime> dirBefore = ProjectFileStamps(dir);
             object savedBefore = ComHelpers.Safe<object>(delegate { return (object)project.Saved; });
-            try { project.Save(); }
+            // FileName passed explicitly: late-bound, the optional parameter has no
+            // default (HMI project: "Missing parameter does not have a default
+            // value"). "" is EnvDTE's own default, a plain save under the same name.
+            try { project.Save(""); }
             catch (Exception ex) { throw new BridgeException("Project.Save failed for '" + file + "': " + ex.Message); }
 
             Json.JObj after = FileStamp(file);
@@ -591,7 +594,7 @@ namespace Te1000Daemon
             return stamps;
         }
 
-        private static Json.JObj FileStamp(string file)
+        internal static Json.JObj FileStamp(string file)
         {
             var o = new Json.JObj();
             var fi = new System.IO.FileInfo(file);
