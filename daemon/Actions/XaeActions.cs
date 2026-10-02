@@ -446,16 +446,32 @@ namespace Te1000Daemon
             dynamic project = matches[0];
             string file = ComHelpers.SafeStr(delegate { return project.FullName; });
             Json.JObj before = FileStamp(file);
+            string dir = System.IO.Path.GetDirectoryName(file);
+            Dictionary<string, DateTime> dirBefore = ProjectFileStamps(dir);
+            object savedBefore = ComHelpers.Safe<object>(delegate { return (object)project.Saved; });
             try { project.Save(); }
             catch (Exception ex) { throw new BridgeException("Project.Save failed for '" + file + "': " + ex.Message); }
 
             Json.JObj after = FileStamp(file);
-            bool written = !(Json.Write(before) == Json.Write(after));
+            object savedAfter = ComHelpers.Safe<object>(delegate { return (object)project.Saved; });
+            Dictionary<string, DateTime> dirAfter = ProjectFileStamps(dir);
+            int changed = 0;
+            foreach (var kv in dirAfter)
+            {
+                DateTime t;
+                if (!dirBefore.TryGetValue(kv.Key, out t) || t != kv.Value) changed++;
+            }
+            bool written = !(Json.Write(before) == Json.Write(after)) || changed > 0;
             var data = new Json.JObj();
-            // saved reflects the file on disk: Project.Save on an unmodified project
-            // may write nothing, which is reported as saved:false, unchanged:true.
+            // saved reflects files on disk (the project file, or any project file
+            // under its directory, e.g. a .TcPOU or .xti): Project.Save on an
+            // unmodified project may write nothing, reported as saved:false,
+            // unchanged:true. projectSaved* are EnvDTE Project.Saved (true = clean).
             data["saved"] = written;
             data["unchanged"] = !written;
+            data["savedFiles"] = changed;
+            data["projectSavedBefore"] = savedBefore;
+            data["projectSavedAfter"] = savedAfter;
             data["projectName"] = ComHelpers.SafeStr(delegate { return project.Name; });
             data["uniqueName"] = ComHelpers.SafeStr(delegate { return project.UniqueName; });
             data["file"] = file;
@@ -514,6 +530,37 @@ namespace Te1000Daemon
         {
             try { return string.Equals(System.IO.Path.GetFullPath(a), System.IO.Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase); }
             catch { return string.Equals(a, b, StringComparison.OrdinalIgnoreCase); }
+        }
+
+        private static readonly HashSet<string> ProjectFileExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ".tsproj", ".xti", ".plcproj", ".TcPOU", ".TcDUT", ".TcGVL", ".TcIO", ".TcTTO", ".TcVIS", ".TcTLEO", ".TcGTLO", ".TcSMO",
+        };
+        private static readonly HashSet<string> SkippedDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "_Boot", "_CompileInfo", "_Libraries", "bin", "obj", ".git", "node_modules",
+        };
+
+        // Last-write times of project files under dir (recursive, build output skipped).
+        private static Dictionary<string, DateTime> ProjectFileStamps(string dir)
+        {
+            var stamps = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+            var pending = new Stack<string>();
+            if (!string.IsNullOrEmpty(dir)) pending.Push(dir);
+            while (pending.Count > 0)
+            {
+                var di = new System.IO.DirectoryInfo(pending.Pop());
+                try
+                {
+                    foreach (var fi in di.GetFiles())
+                        if (ProjectFileExts.Contains(fi.Extension)) stamps[fi.FullName] = fi.LastWriteTimeUtc;
+                    foreach (var sub in di.GetDirectories())
+                        if (!SkippedDirs.Contains(sub.Name)) pending.Push(sub.FullName);
+                }
+                catch (System.IO.IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+            return stamps;
         }
 
         private static Json.JObj FileStamp(string file)
