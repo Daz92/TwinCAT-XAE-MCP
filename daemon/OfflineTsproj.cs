@@ -425,8 +425,12 @@ namespace Te1000Daemon
             return v is bool && (bool)v;
         }
 
-        // True only when a project with this file still exposes its Object; an
-        // unloaded project (or one Projects.Item cannot return) is not loaded.
+        // EnvDTE.Constants.vsProjectKindUnmodeled: the Kind of an unloaded project.
+        private const string UnmodeledKind = "{67294A52-A4F0-11D2-AA88-00C04F688DDE}";
+
+        // True when a project with this file is loaded. An unloaded project keeps its
+        // entry with the unmodeled Kind (or loses its FullName). Project.Object is not
+        // a load test: a loaded TcHmi project never exposes one (live 2026-10-02).
         internal static bool IsLoaded(dynamic dte, string file)
         {
             var all = new List<dynamic>();
@@ -436,7 +440,8 @@ namespace Te1000Daemon
             {
                 string full = ComHelpers.SafeStr(delegate { return p.FullName; });
                 if (full == null || !string.Equals(full, file, StringComparison.OrdinalIgnoreCase)) continue;
-                if (ComHelpers.Safe<object>(delegate { return (object)p.Object; }) != null) return true;
+                string kind = ComHelpers.SafeStr(delegate { return p.Kind; });
+                if (!string.Equals(kind, UnmodeledKind, StringComparison.OrdinalIgnoreCase)) return true;
             }
             return false;
         }

@@ -468,7 +468,7 @@ namespace Te1000Daemon
         }
 
         // xae_project_unload: Solution Explorer Unload Project on exactly one saved
-        // top-level project; verified by the project no longer exposing its Object.
+        // top-level project; verified by the project's unmodeled (unloaded) Kind.
         private static Json.JObj XaeProjectUnload(ActionContext ctx)
         {
             dynamic dte = ctx.Dte(true);
@@ -486,7 +486,7 @@ namespace Te1000Daemon
             if (!OfflineTsproj.RunOnProjectNode(dte, name, "Project.UnloadProject"))
                 throw new BridgeException("Project '" + name + "' or its Unload Project command is not available in Solution Explorer (nothing unloaded)");
             if (OfflineTsproj.IsLoaded(dte, file))
-                throw new BridgeException("Project.UnloadProject ran but '" + unique + "' still exposes its Object");
+                throw new BridgeException("Project.UnloadProject ran but '" + unique + "' is still loaded");
             var data = new Json.JObj();
             data["unloaded"] = true;
             data["project"] = name;
@@ -495,7 +495,7 @@ namespace Te1000Daemon
         }
 
         // xae_project_reload: Solution Explorer Reload Project on an unloaded top-level
-        // project, then waits (120 s) until it exposes its Object again.
+        // project, then waits (120 s) until it is loaded again.
         private static Json.JObj XaeProjectReload(ActionContext ctx)
         {
             dynamic dte = ctx.Dte(true);
@@ -510,7 +510,7 @@ namespace Te1000Daemon
             DateTime until = DateTime.UtcNow.AddSeconds(120);
             while (!OfflineTsproj.IsLoaded(dte, file))
             {
-                if (DateTime.UtcNow > until) throw new BridgeException("Project.ReloadProject ran but '" + unique + "' did not expose its Object within 120 s");
+                if (DateTime.UtcNow > until) throw new BridgeException("Project.ReloadProject ran but '" + unique + "' did not load within 120 s");
                 System.Threading.Thread.Sleep(1000);
             }
             var data = new Json.JObj();
