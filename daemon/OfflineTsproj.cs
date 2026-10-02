@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -20,8 +21,6 @@ namespace Te1000Daemon
     // decoded text and must change only the bytes it means to.
     internal static class OfflineTsproj
     {
-        private const string SolutionExplorerKind = "{3AE79031-E1BC-11D0-8F78-00A0C9110057}";
-        private const int SelectItem = 1; // vsUISelectionTypeSelect
 
         internal sealed class Plan
         {
@@ -402,47 +401,53 @@ namespace Te1000Daemon
 
         // Selects the project's node (also when shown as "<name> (unloaded)"),
         // searching below the solution node to depth 3 so a project inside a
-        // solution folder is found too.
+        // solution folder is found too. Goes through the typed EnvDTE PIAs: late-bound
+        // UIHierarchyItem.Select fails on TcXaeShell ("Error while invoking Select",
+        // live 2026-10-02), as late-bound ToolWindows.ErrorList does (XaeActions).
         private static bool SelectProject(dynamic dte, string projectName)
         {
             string error;
-            dynamic root = SolutionNode(dte, out error);
+            EnvDTE.UIHierarchyItem root = SolutionNode(dte, out error);
             if (root == null) return false;
-            dynamic item = FindNode(root, projectName, 3);
+            EnvDTE.UIHierarchyItem item = FindNode(root, projectName, 3);
             if (item == null) return false;
-            item.Select(SelectItem);
+            item.Select(EnvDTE.vsUISelectionType.vsUISelectionTypeSelect);
             return true;
         }
 
-        // The Solution Explorer's solution node. The hierarchy is read from the
-        // window's Object first: TcXaeShell may not resolve DTE.ToolWindows late-bound.
-        private static dynamic SolutionNode(dynamic dte, out string error)
+        // The Solution Explorer's solution node, through a typed DTE2.
+        private static EnvDTE.UIHierarchyItem SolutionNode(object rawDte, out string error)
         {
             error = null;
-            dynamic window = null;
-            try { window = dte.Windows.Item(SolutionExplorerKind); window.Activate(); }
-            catch (Exception ex) { error = "Solution Explorer window: " + ex.Message; return null; }
-            dynamic hierarchy = ComHelpers.Safe<object>(delegate { return (object)window.Object; });
-            if (hierarchy == null)
-                hierarchy = ComHelpers.Safe<object>(delegate { return (object)dte.ToolWindows.SolutionExplorer; });
-            if (hierarchy == null) { error = "no UIHierarchy from the Solution Explorer window"; return null; }
-            try { return hierarchy.UIHierarchyItems.Item(1); }
-            catch (Exception ex) { error = "solution node: " + ex.Message; return null; }
+            IntPtr pUnk = IntPtr.Zero;
+            try
+            {
+                pUnk = Marshal.GetIUnknownForObject(rawDte);
+                var dte = (EnvDTE80.DTE2)Marshal.GetTypedObjectForIUnknown(pUnk, typeof(EnvDTE80.DTE2));
+                dte.Windows.Item(EnvDTE.Constants.vsWindowKindSolutionExplorer).Activate();
+                EnvDTE.UIHierarchy hierarchy = dte.ToolWindows.SolutionExplorer;
+                if (hierarchy == null) { error = "ToolWindows.SolutionExplorer returned null"; return null; }
+                return hierarchy.UIHierarchyItems.Item(1);
+            }
+            catch (Exception ex) { error = "Solution Explorer: " + ex.Message; return null; }
+            finally { if (pUnk != IntPtr.Zero) Marshal.Release(pUnk); }
         }
 
-        private static dynamic FindNode(dynamic parent, string projectName, int depth)
+        private static EnvDTE.UIHierarchyItem FindNode(EnvDTE.UIHierarchyItem parent, string projectName, int depth)
         {
-            int n = ComHelpers.SafeInt(delegate { return parent.UIHierarchyItems.Count; });
+            int n = 0;
+            try { n = parent.UIHierarchyItems.Count; } catch { }
             for (int i = 1; i <= n; i++)
             {
-                dynamic item = null;
+                EnvDTE.UIHierarchyItem item = null;
                 try { item = parent.UIHierarchyItems.Item(i); } catch { }
                 if (item == null) continue;
-                string name = ComHelpers.SafeStr(delegate { return item.Name; });
+                string name = null;
+                try { name = item.Name; } catch { }
                 if (name != null && (name == projectName || name.StartsWith(projectName + " (", StringComparison.Ordinal))) return item;
                 if (depth > 1)
                 {
-                    dynamic found = FindNode(item, projectName, depth - 1);
+                    EnvDTE.UIHierarchyItem found = FindNode(item, projectName, depth - 1);
                     if (found != null) return found;
                 }
             }
@@ -453,27 +458,31 @@ namespace Te1000Daemon
         // so a caller can see how XAE shows each project.
         internal static Json.JObj ListSolutionExplorer(ActionContext ctx)
         {
-            dynamic dte = ctx.Dte(true);
             string error;
-            dynamic root = SolutionNode(dte, out error);
+            EnvDTE.UIHierarchyItem root = SolutionNode(ctx.Dte(true), out error);
             var data = new Json.JObj();
             if (root == null) { data["error"] = error; return data; }
-            data["solution"] = ComHelpers.SafeStr(delegate { return root.Name; });
+            string rootName = null;
+            try { rootName = root.Name; } catch { }
+            data["solution"] = rootName;
             data["nodes"] = ListNodes(root, 3);
             return data;
         }
 
-        private static Json.JArr ListNodes(dynamic parent, int depth)
+        private static Json.JArr ListNodes(EnvDTE.UIHierarchyItem parent, int depth)
         {
             var arr = new Json.JArr();
-            int n = ComHelpers.SafeInt(delegate { return parent.UIHierarchyItems.Count; });
+            int n = 0;
+            try { n = parent.UIHierarchyItems.Count; } catch { }
             for (int i = 1; i <= n; i++)
             {
-                dynamic item = null;
+                EnvDTE.UIHierarchyItem item = null;
                 try { item = parent.UIHierarchyItems.Item(i); } catch { }
                 if (item == null) continue;
                 var node = new Json.JObj();
-                node["name"] = ComHelpers.SafeStr(delegate { return item.Name; });
+                string name = null;
+                try { name = item.Name; } catch { }
+                node["name"] = name;
                 if (depth > 1)
                 {
                     Json.JArr children = ListNodes(item, depth - 1);
