@@ -9,8 +9,8 @@ namespace Te1000Daemon
     // PS bridge helper (function name noted). All run on the STA worker thread.
     public static class ComHelpers
     {
-        // Is-RetryableComError (L500-507): RPC_E_CALL_REJECTED (-2147418111) or
-        // RPC_E_SERVERCALL_RETRYLATER (-2147023174).
+        // Is-RetryableComError (L500-507): RPC_E_CALL_REJECTED (0x80010001,
+        // -2147418111) or RPC_S_SERVER_UNAVAILABLE (0x800706BA, -2147023174).
         public static bool IsRetryableComError(Exception ex)
         {
             if (ex == null) return false;
