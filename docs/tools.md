@@ -310,9 +310,17 @@ full XML and changes only the requested fields. Pass `dryRun:true` to see `plann
 After a write the full state is read twice (immediately and after `settleMs`); check
 `verified`, `notAsPlanned` and `unstable`. A write is refused when the state changed
 since the daemon's last read (`driftSinceLastCall`); re-read with `analytics_get` or pass
-`acceptDrift:true`. `target_remove` and `stream_edit` are refused: the TF3500 model behind
-`TIAN` never deletes targets it has seen and overwrites stream settings written to the
-stream item, so delete targets and edit stream settings in XAE. Do not use `tc_tree set_xml` on
+`acceptDrift:true`. `target_remove` 🔒 (`targetId`; refused while a stream uses it) and
+`stream_edit` (`streamOid`, `fields` = stream `Config` leaves, `symbols` = the full symbol
+list) cannot go through `ConsumeXml`: the TF3500 model behind `TIAN` never deletes targets
+it has seen and overwrites stream settings written to the stream item. They edit the saved
+`.tsproj` on disk instead, while XAE does not hold it: the solution, every project and every
+open document must be saved (the call refuses and lists what is not), then the System
+Manager project is unloaded (`Project.UnloadProject`) or, if that is unavailable, the
+solution is closed, the file is edited (backup `<name>.tsproj.te1000-<UTC>.bak`, only the
+edited element's bytes change) and the project is reloaded or the solution reopened. The
+result reports `mode` (`unload` | `reopen`), `backup`, `plannedDiff` and `verified`; a
+`dryRun` reports the mode and whether the edit applies, touching nothing. Do not use `tc_tree set_xml` on
 `TIAN`: a partial `ConsumeXml` replaces the whole `Config`, and echoing
 `StreamContexts` re-selects every source. `logger_create` is refused on the native
 model, which has no DataLogger objects.

@@ -34,10 +34,21 @@ All notable changes to this project are documented here. The format is based on
   `acceptDrift`). TIAN writes drop `StreamContexts` by default (`contextsMode: omit`),
   because echoing them re-selects every source. `logger_enable`, `target_add`,
   `target_edit` and `context_hide` are verified live.
-- `target_remove` and `stream_edit` refuse with an explanation. The TIAN XML is a
-  projection of TF3500's managed model: its recalc imports targets add/update-only and
-  republishes them (a removed target came back live), and it overwrites stream `Config`
-  written to the stream item (a `SamplingDivider` edit was silently undone live).
+- `analytics_set` `target_remove` and `stream_edit` edit the saved `.tsproj` on disk. The
+  TIAN XML is a projection of TF3500's managed model: its recalc imports targets
+  add/update-only and republishes them (a removed target came back live), and it
+  overwrites stream `Config` written to the stream item (a `SamplingDivider` edit was
+  silently undone live). So the daemon requires the solution, every project and every open
+  document to be saved (it never saves), unloads the System Manager project
+  (`Project.UnloadProject`, mode `unload`) or closes the solution (mode `reopen`), backs the
+  file up as `<name>.tsproj.te1000-<UTC>.bak`, changes only the edited element's bytes
+  (checked against a DOM edit first; encoding, BOM and line endings kept), and reloads or
+  reopens whatever happened. `target_remove` (`targetId`, delete-guarded) is refused while a
+  stream uses the target; `stream_edit` (`streamOid`, `fields` = stream `Config` leaves,
+  `symbols` = full symbol list, written as base64 NUL-terminated `SymbolNames`) finds the
+  stream by its OID or by context and name. Results carry `mode`, `backup`, `plannedDiff`
+  and `verified`; `dryRun` reports the mode and whether the edit applies, touching nothing.
+  The te1000 guard asks the user before either op runs (not for `dryRun`).
 
 ### Fixed
 - `analytics_get` / `analytics_set` find streams created in the XAE GUI since the last TIAN recalc:
