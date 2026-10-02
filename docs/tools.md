@@ -307,7 +307,9 @@ Scope + Analytics (`TIAN`): `scope_create`, `scope_add_child`, `scope_rename`,
 `analytics_get` returns the native `TIAN` configuration with MQTT secrets redacted.
 `analytics_set` takes an `op`: `logger_enable`, `target_add` (`copyFrom` takes a
 `targetId` and clones its encrypted credentials), `target_edit` (`targetId`),
-`context_hide`, `stream_add` (experimental), `stream_remove` 🔒. Each write re-reads the
+`context_hide`, `stream_add` (experimental: `CreateChild` on the context throws `E_NOTIMPL` live, so it
+falls back to `ConsumeXml` of `<AddStream Name IsEventBased/>` on the context, unverified; `via`
+says which ran), `stream_remove` 🔒. Each write re-reads the
 full XML and changes only the requested fields. Pass `dryRun:true` to see `plannedDiff`.
 After a write the full state is read twice (immediately and after `settleMs`); check
 `verified`, `notAsPlanned` and `unstable`. A write is refused when the state changed

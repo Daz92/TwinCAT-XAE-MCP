@@ -1062,12 +1062,14 @@ namespace Te1000Daemon
             return item;
         }
 
-        // stream_add (EXPERIMENTAL, unverified live): CreateChild(name, subType=0)
-        // on the context item, ghost-guarded (must come back ItemType 102 named
-        // <name>). TF3500 itself creates streams by ConsumeXml of
-        // <AddStream Name Oid IsEventBased/> on the context item
-        // (StreamContextModel.CreateStreamProgrammatically) - the fallback if
-        // CreateChild proves unusable.
+        // stream_add (EXPERIMENTAL): CreateChild(name, subType=0) on the context
+        // item, ghost-guarded (must come back ItemType 102 named <name>). Live,
+        // CreateChild on a stream context throws E_NOTIMPL; then ConsumeXml of
+        // <AddStream Name IsEventBased/> on the context item, the form TF3500
+        // itself uses (StreamContextModel.CreateStreamProgrammatically). No Oid
+        // is sent: the daemon has no OID allocator, so TF3500 must assign one
+        // (unverified). `via` reports which path ran; verified comes from the
+        // post-settle read either way.
         private static Json.JObj StreamAdd(ActionContext ctx, dynamic sm, AlySnapshot before, Json.JObj result)
         {
             Json.JObj p = ctx.Payload;
@@ -1086,16 +1088,38 @@ namespace Te1000Daemon
             if (IsDryRun(p)) { result["written"] = false; return result; }
 
             var beforeFlat = FlattenAll(before.TianDoc, before.Streams);
-            dynamic child = ctxItem.CreateChild(name, subType, "", null);
-            string actual = child == null ? null : ComHelpers.SafeStr(delegate { return child.Name; });
-            int type = child == null ? -1 : ComHelpers.SafeInt(delegate { return child.ItemType; }, -1);
-            if (child == null || actual != name || type != 102)
+            dynamic child = null;
+            bool notImpl = false;
+            try { child = ctxItem.CreateChild(name, subType, "", null); }
+            catch (Exception ex)
             {
-                if (!string.IsNullOrWhiteSpace(actual)) { try { ctxItem.DeleteChild(actual); } catch { } }
-                throw new BridgeException("CreateChild('" + name + "', " + subType.ToString(CultureInfo.InvariantCulture) + ") under '" + ctxPath + "' did not produce an Analytics stream (got " +
-                    (child == null ? "null" : "name='" + actual + "', itemType=" + type.ToString(CultureInfo.InvariantCulture)) + "); any stray child was deleted. Add the stream in XAE (Stream Sources tab) instead.");
+                const int ENotImpl = unchecked((int)0x80004001);
+                if (!(ex is NotImplementedException) && ex.HResult != ENotImpl && (ex.InnerException == null || ex.InnerException.HResult != ENotImpl)) throw;
+                notImpl = true;
             }
-            result["created"] = ComHelpers.ConvertTreeItem(child);
+            if (notImpl)
+            {
+                var x = new XmlDocument();
+                XmlElement add = x.CreateElement("AddStream");
+                add.SetAttribute("Name", name);
+                add.SetAttribute("IsEventBased", "false");
+                x.AppendChild(x.CreateElement("TreeItem")).AppendChild(add);
+                ComHelpers.ConsumeXml(ctxItem, x.OuterXml);
+                result["via"] = "consumeXml";
+            }
+            else
+            {
+                string actual = child == null ? null : ComHelpers.SafeStr(delegate { return child.Name; });
+                int type = child == null ? -1 : ComHelpers.SafeInt(delegate { return child.ItemType; }, -1);
+                if (child == null || actual != name || type != 102)
+                {
+                    if (!string.IsNullOrWhiteSpace(actual)) { try { ctxItem.DeleteChild(actual); } catch { } }
+                    throw new BridgeException("CreateChild('" + name + "', " + subType.ToString(CultureInfo.InvariantCulture) + ") under '" + ctxPath + "' did not produce an Analytics stream (got " +
+                        (child == null ? "null" : "name='" + actual + "', itemType=" + type.ToString(CultureInfo.InvariantCulture)) + "); any stray child was deleted. Add the stream in XAE (Stream Sources tab) instead.");
+                }
+                result["via"] = "createChild";
+                result["created"] = ComHelpers.ConvertTreeItem(child);
+            }
             ctx.Cache.Invalidate("TIAN");
             Json.JObj r = Finish(sm, p, beforeFlat, null, result);
             // Verified = a stream OID absent before is present, under this
