@@ -70,6 +70,15 @@ XAE shell and solution control.
   file under its directory changed on disk (otherwise `saved: false, unchanged: true`); the
   stamps are the authority, `projectSavedBefore/After` (EnvDTE `Project.Saved`) are not. Nested projects reachable through `ProjectItems`
   are searched too.
+- `project_unload` (`projectPath`, `solutionPath?`) — Solution Explorer **Unload Project** on
+  exactly one top-level solution project, matched like `save_project`. Refused when
+  `Project.Saved` is not true (run `save_project` first) and for the System Manager `.tsproj`,
+  for which XAE offers no Unload Project (the offline `tc_measurement analytics_set` ops edit it).
+  Verified by the project no longer exposing its `Object`; returns
+  `{unloaded: true, project, uniqueName}`.
+- `project_reload` (`projectPath`, `solutionPath?`) — **Reload Project** on the unloaded node
+  (`<name> (unloaded)`), then waits up to 120 s for the project to expose its `Object` again;
+  returns `{reloaded: true, project, uniqueName}`. Both ask the user under the guard.
 - `list_commands` (`filter` regex, `limit`) — discover available DTE command names.
 
 ### `xae_build`

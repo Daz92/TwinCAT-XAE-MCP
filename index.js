@@ -200,7 +200,7 @@ server.registerTool(
   toolSchemas.xae,
   async ({ action, solutionPath, projectPath, closeExisting, discardChanges, filter, limit, severityFilter, button, remember, mode }) => {
     const payload = { mode };
-    if (action === "save_project") {
+    if (action === "save_project" || action === "project_unload" || action === "project_reload") {
       need({ projectPath }, ["projectPath"], action);
       Object.assign(payload, { projectPath, solutionPath });
     }

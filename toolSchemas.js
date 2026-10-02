@@ -70,6 +70,8 @@ const XAE_ACTIONS = {
   open_solution: "xae_open_solution",
   save_all: "xae_save_all",
   save_project: "xae_save_project",
+  project_unload: "xae_project_unload",
+  project_reload: "xae_project_reload",
   active_document: "xae_get_active_document",
   selected_items: "xae_get_selected_items",
   error_list: "xae_get_error_list",
@@ -83,11 +85,11 @@ const XAE_ACTIONS = {
 // (description + zod inputSchema raw shape) that registerTool consumes. ----------
 const toolSchemas = {
   xae: {
-    description: "XAE shell: status, open_solution (solutionPath; closeExisting:true reopens, discardChanges:true closes the current solution WITHOUT saving before reopening), save_all, save_project (projectPath = full project file path or a UniqueName/Name matching exactly one project, solutionPath? must be the open solution — EnvDTE Project.Save on that one project only, e.g. the System Manager .tsproj, instead of File.SaveAll; refuses when ambiguous; a PLC project nested in the .tsproj is refused naming the .tsproj to save instead; reports the file saved with before/after stamps; saved is true when the project file or any project file under its directory changed, savedFiles counts those, projectSavedBefore/After are EnvDTE Project.Saved), active_document, selected_items, error_list (default 50, in Error List order; pass limit to widen, severityFilter:'errors'|'warnings' to filter before the cap — count still reports the true matching total), clear_error_list, list_commands (filter regex, limit), dialog_probe (read-only: is a modal dialog blocking XAE right now? returns its title/text/buttons; never clicks anything), dialog_resolve (button, remember) — click a chosen button on the live modal dialog and optionally remember it in the allowlist; pair with dialog_probe. Destructive prompts (activate/restart/download/safety) are refused for auto-remember (the click still happens once).",
+    description: "XAE shell: status, open_solution (solutionPath; closeExisting:true reopens, discardChanges:true closes the current solution WITHOUT saving before reopening), save_all, save_project (projectPath = full project file path or a UniqueName/Name matching exactly one project, solutionPath? must be the open solution — EnvDTE Project.Save on that one project only, e.g. the System Manager .tsproj, instead of File.SaveAll; refuses when ambiguous; a PLC project nested in the .tsproj is refused naming the .tsproj to save instead; reports the file saved with before/after stamps; saved is true when the project file or any project file under its directory changed, savedFiles counts those, projectSavedBefore/After are EnvDTE Project.Saved), project_unload (projectPath = UniqueName/Name/full path of exactly one top-level solution project, solutionPath? — Solution Explorer Unload Project; refuses an unsaved project (save_project first) and the System Manager .tsproj (no Unload Project; use the offline tc_measurement analytics_set ops); returns {unloaded, project, uniqueName}), project_reload (same projectPath — Reload Project on the unloaded node, waits up to 120 s for it to load; returns {reloaded, project, uniqueName}), active_document, selected_items, error_list (default 50, in Error List order; pass limit to widen, severityFilter:'errors'|'warnings' to filter before the cap — count still reports the true matching total), clear_error_list, list_commands (filter regex, limit), dialog_probe (read-only: is a modal dialog blocking XAE right now? returns its title/text/buttons; never clicks anything), dialog_resolve (button, remember) — click a chosen button on the live modal dialog and optionally remember it in the allowlist; pair with dialog_probe. Destructive prompts (activate/restart/download/safety) are refused for auto-remember (the click still happens once).",
     inputSchema: {
       action: z.enum(Object.keys(XAE_ACTIONS)),
       solutionPath: z.string().optional(),
-      projectPath: z.string().optional().describe("save_project: full project file path, or UniqueName/Name of exactly one project"),
+      projectPath: z.string().optional().describe("save_project / project_unload / project_reload: full project file path, or UniqueName/Name of exactly one project (top-level for unload/reload)"),
       closeExisting: z.boolean().optional(),
       discardChanges: z.boolean().optional(),
       filter: z.string().optional(),

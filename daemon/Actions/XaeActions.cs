@@ -9,7 +9,8 @@ namespace Te1000Daemon
     //   xae_execute_command, xae_get_active_document,
     //   xae_get_selected_items, xae_focus_tree_item,
     //   xae_get_error_list, xae_clear_error_list,
-    //   xae_save_all, xae_save_project, xae_solution_build.
+    //   xae_save_all, xae_save_project, xae_project_unload,
+    //   xae_project_reload, xae_solution_build.
     internal static class XaeActions
     {
         public static void Register(Dictionary<string, ActionHandler> h)
@@ -25,6 +26,8 @@ namespace Te1000Daemon
             h["xae_clear_error_list"] = XaeClearErrorList;
             h["xae_save_all"] = XaeSaveAll;
             h["xae_save_project"] = XaeSaveProject;
+            h["xae_project_unload"] = XaeProjectUnload;
+            h["xae_project_reload"] = XaeProjectReload;
             h["xae_solution_build"] = XaeSolutionBuild;
         }
 
@@ -417,34 +420,13 @@ namespace Te1000Daemon
         {
             string wanted = ctx.Require("projectPath");
             dynamic dte = ctx.Dte(true);
-            string solutionPath = ctx.Payload.Str("solutionPath");
-            string openSolution = ComHelpers.SafeStr(delegate { return dte.Solution.FullName; });
-            if (string.IsNullOrWhiteSpace(openSolution)) throw new BridgeException("No solution is open");
-            if (!string.IsNullOrWhiteSpace(solutionPath) && !SamePath(solutionPath, openSolution))
-                throw new BridgeException("Open solution is '" + openSolution + "', not '" + solutionPath + "' (nothing saved)");
-
-            bool byPath = System.IO.Path.IsPathRooted(wanted);
+            string openSolution = OpenSolution(ctx, dte, "nothing saved");
             var all = new List<dynamic>();
             CollectProjects(dte.Solution.Projects, all);
-            var matches = new List<dynamic>();
-            var names = new List<string>();
-            foreach (dynamic p in all)
+            dynamic project = MatchOneProject(all, wanted, openSolution, "nothing saved", delegate
             {
-                string full = ComHelpers.SafeStr(delegate { return p.FullName; });
-                string unique = ComHelpers.SafeStr(delegate { return p.UniqueName; });
-                string name = ComHelpers.SafeStr(delegate { return p.Name; });
-                names.Add(unique ?? name);
-                bool hit = byPath
-                    ? !string.IsNullOrEmpty(full) && SamePath(full, wanted)
-                    : string.Equals(unique, wanted, StringComparison.OrdinalIgnoreCase) || string.Equals(name, wanted, StringComparison.OrdinalIgnoreCase);
-                if (hit) matches.Add(p);
-            }
-            if (matches.Count == 0) RefuseNestedPlc(ctx, all, byPath ? System.IO.Path.GetFileNameWithoutExtension(wanted) : wanted, wanted);
-            if (matches.Count != 1)
-                throw new BridgeException((matches.Count == 0 ? "No" : matches.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)) +
-                    " project(s) match '" + wanted + "' (nothing saved). Projects: " + string.Join(", ", names.ToArray()));
-
-            dynamic project = matches[0];
+                RefuseNestedPlc(ctx, all, System.IO.Path.IsPathRooted(wanted) ? System.IO.Path.GetFileNameWithoutExtension(wanted) : wanted, wanted);
+            });
             string file = ComHelpers.SafeStr(delegate { return project.FullName; });
             Json.JObj before = FileStamp(file);
             string dir = System.IO.Path.GetDirectoryName(file);
@@ -483,6 +465,130 @@ namespace Te1000Daemon
             data["after"] = after;
             data["solution"] = openSolution;
             return data;
+        }
+
+        // xae_project_unload: Solution Explorer Unload Project on exactly one saved
+        // top-level project; verified by the project no longer exposing its Object.
+        private static Json.JObj XaeProjectUnload(ActionContext ctx)
+        {
+            dynamic dte = ctx.Dte(true);
+            string solution = OpenSolution(ctx, dte, "nothing unloaded");
+            dynamic project = TopLevelProject(ctx, dte, solution, "nothing unloaded");
+            string name = ComHelpers.SafeStr(delegate { return project.Name; });
+            string unique = ComHelpers.SafeStr(delegate { return project.UniqueName; });
+            string file = ProjectFile(project, solution);
+            if (!OfflineTsproj.IsLoaded(dte, file)) throw new BridgeException("Project '" + unique + "' is not loaded (nothing unloaded)");
+            // Project.Saved can read true while a save still writes files, but false is
+            // trusted: an unsaved project is refused rather than unloaded through a prompt.
+            object saved = ComHelpers.Safe<object>(delegate { return (object)project.Saved; });
+            if (!(saved is bool) || !(bool)saved)
+                throw new BridgeException("Project '" + unique + "' has unsaved changes (Project.Saved is not true); run xae save_project on it first (nothing unloaded).");
+            if (!OfflineTsproj.RunOnProjectNode(dte, name, "Project.UnloadProject"))
+                throw new BridgeException("Project '" + name + "' or its Unload Project command is not available in Solution Explorer (nothing unloaded)");
+            if (OfflineTsproj.IsLoaded(dte, file))
+                throw new BridgeException("Project.UnloadProject ran but '" + unique + "' still exposes its Object");
+            var data = new Json.JObj();
+            data["unloaded"] = true;
+            data["project"] = name;
+            data["uniqueName"] = unique;
+            return data;
+        }
+
+        // xae_project_reload: Solution Explorer Reload Project on an unloaded top-level
+        // project, then waits (120 s) until it exposes its Object again.
+        private static Json.JObj XaeProjectReload(ActionContext ctx)
+        {
+            dynamic dte = ctx.Dte(true);
+            string solution = OpenSolution(ctx, dte, "nothing reloaded");
+            dynamic project = TopLevelProject(ctx, dte, solution, "nothing reloaded");
+            string name = ComHelpers.SafeStr(delegate { return project.Name; });
+            string unique = ComHelpers.SafeStr(delegate { return project.UniqueName; });
+            string file = ProjectFile(project, solution);
+            if (OfflineTsproj.IsLoaded(dte, file)) throw new BridgeException("Project '" + unique + "' is already loaded (nothing reloaded)");
+            if (!OfflineTsproj.RunOnProjectNode(dte, name, "Project.ReloadProject"))
+                throw new BridgeException("Project '" + name + "' or its Reload Project command is not available in Solution Explorer (nothing reloaded)");
+            DateTime until = DateTime.UtcNow.AddSeconds(120);
+            while (!OfflineTsproj.IsLoaded(dte, file))
+            {
+                if (DateTime.UtcNow > until) throw new BridgeException("Project.ReloadProject ran but '" + unique + "' did not expose its Object within 120 s");
+                System.Threading.Thread.Sleep(1000);
+            }
+            var data = new Json.JObj();
+            data["reloaded"] = true;
+            data["project"] = name;
+            data["uniqueName"] = unique;
+            return data;
+        }
+
+        // The top-level project projectPath names, matched as save_project matches.
+        // The System Manager .tsproj is refused: XAE offers no Unload Project for it.
+        private static dynamic TopLevelProject(ActionContext ctx, dynamic dte, string solution, string nothing)
+        {
+            string wanted = ctx.Require("projectPath");
+            var top = new List<dynamic>();
+            int count = ComHelpers.SafeInt(delegate { return dte.Solution.Projects.Count; });
+            for (int i = 1; i <= count; i++)
+            {
+                dynamic p;
+                try { p = dte.Solution.Projects.Item(i); }
+                catch (Exception ex) { throw new BridgeException("Solution.Projects.Item(" + i.ToString(System.Globalization.CultureInfo.InvariantCulture) + ") failed: " + ex.Message + " (" + nothing + ")"); }
+                if (p != null && !string.Equals(ComHelpers.SafeStr(delegate { return p.Kind; }), SolutionFolderKind, StringComparison.OrdinalIgnoreCase)) top.Add(p);
+            }
+            dynamic project = MatchOneProject(top, wanted, solution, nothing, null);
+            string file = ProjectFile(project, solution);
+            if (file != null && file.EndsWith(".tsproj", StringComparison.OrdinalIgnoreCase))
+                throw new BridgeException("'" + wanted + "' is the System Manager .tsproj, for which XAE offers no Unload Project (" + nothing + "). " +
+                    "Offline .tsproj edits go through tc_measurement analytics_set (stream_add, stream_edit, stream_remove, target_remove), which unload and reload it themselves.");
+            return project;
+        }
+
+        // The open solution's path; refused when none is open or solutionPath names another.
+        private static string OpenSolution(ActionContext ctx, dynamic dte, string nothing)
+        {
+            string solutionPath = ctx.Payload.Str("solutionPath");
+            string openSolution = ComHelpers.SafeStr(delegate { return dte.Solution.FullName; });
+            if (string.IsNullOrWhiteSpace(openSolution)) throw new BridgeException("No solution is open");
+            if (!string.IsNullOrWhiteSpace(solutionPath) && !SamePath(solutionPath, openSolution))
+                throw new BridgeException("Open solution is '" + openSolution + "', not '" + solutionPath + "' (" + nothing + ")");
+            return openSolution;
+        }
+
+        // The one project of candidates that wanted names: a rooted path matches its
+        // file, anything else UniqueName or Name (case-insensitive). onNone, when
+        // given, runs before a no-match refusal and may throw a better one.
+        private static dynamic MatchOneProject(List<dynamic> candidates, string wanted, string solution, string nothing, Action onNone)
+        {
+            bool byPath = System.IO.Path.IsPathRooted(wanted);
+            var matches = new List<dynamic>();
+            var names = new List<string>();
+            foreach (dynamic p in candidates)
+            {
+                string full = ProjectFile(p, solution);
+                string unique = ComHelpers.SafeStr(delegate { return p.UniqueName; });
+                string name = ComHelpers.SafeStr(delegate { return p.Name; });
+                names.Add(unique ?? name);
+                bool hit = byPath
+                    ? !string.IsNullOrEmpty(full) && SamePath(full, wanted)
+                    : string.Equals(unique, wanted, StringComparison.OrdinalIgnoreCase) || string.Equals(name, wanted, StringComparison.OrdinalIgnoreCase);
+                if (hit) matches.Add(p);
+            }
+            if (matches.Count == 0 && onNone != null) onNone();
+            if (matches.Count != 1)
+                throw new BridgeException((matches.Count == 0 ? "No" : matches.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)) +
+                    " project(s) match '" + wanted + "' (" + nothing + "). Projects: " + string.Join(", ", names.ToArray()));
+            return matches[0];
+        }
+
+        // FullName, or for an unloaded project (which has none) the solution
+        // directory joined with its UniqueName, the project file relative to it.
+        private static string ProjectFile(dynamic p, string solution)
+        {
+            string full = ComHelpers.SafeStr(delegate { return p.FullName; });
+            if (!string.IsNullOrEmpty(full)) return full;
+            string unique = ComHelpers.SafeStr(delegate { return p.UniqueName; });
+            if (string.IsNullOrEmpty(unique)) return null;
+            try { return System.IO.Path.GetFullPath(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(solution), unique)); }
+            catch (ArgumentException) { return null; }
         }
 
         // A PLC project lives under TIPC of the System Manager project, not in

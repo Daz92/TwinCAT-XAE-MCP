@@ -73,6 +73,12 @@ test("dialog_resolve and set_netid ask, scan_io_boxes is denied", () => {
   assert.equal(decide(call("tc_system", { action: "scan_io_boxes" })).decision, "deny");
 });
 
+test("project_unload and project_reload ask", () => {
+  assert.equal(decide(call("xae", { action: "project_unload", projectPath: "m4v_hmi" })).decision, "ask");
+  assert.equal(decide(call("xae", { action: "project_reload", projectPath: "m4v_hmi" })).decision, "ask");
+  assert.equal(decide(call("xae", { action: "save_project", projectPath: "m4v_hmi" })).decision, "allow");
+});
+
 test("offline analytics_set ops ask unless dryRun; other ops pass", () => {
   const set = (input) => decide(call("tc_measurement", { action: "analytics_set", ...input })).decision;
   assert.equal(set({ op: "stream_edit", streamOid: "0x1" }), "ask");

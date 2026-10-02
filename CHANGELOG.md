@@ -16,6 +16,10 @@ All notable changes to this project are documented here. The format is based on
   and its descendants carry no variable links; `dryRun`, guarded by `ALLOW_TWINCAT_DELETE`.
 - `xae save_project` — `Project.Save()` on exactly one project (path, UniqueName or Name);
   refuses ambiguity, reports the file saved. `save_all` is unchanged.
+- `xae project_unload` / `project_reload` — Solution Explorer Unload/Reload Project on exactly
+  one top-level project (matched like `save_project`). Unload refuses an unsaved project and
+  verifies the project lost its `Object`; reload waits up to 120 s for it to come back. Both
+  refuse the `.tsproj` (no Unload Project offered) and ask the user under the guard.
 - `deploy/windows/`: `install.ps1` (idempotent npm ci + build + interactive scheduled task
   `TE1000-Daemon-<pipe>` + pipe ping), `te1000-daemon-run.ps1`, `te1000-mcp-launch.ps1`, and
   client snippets for Claude Code, OpenCode and Codex under `clients/`.

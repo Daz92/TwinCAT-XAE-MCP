@@ -40,9 +40,10 @@ const RUNTIME_ACTIONS = {
 };
 
 // Actions that need the user's yes every time: dialog_resolve clicks a button on whatever
-// modal XAE shows (including activate/restart prompts); set_netid changes the activation target.
+// modal XAE shows (including activate/restart prompts); set_netid changes the activation target;
+// project_unload/project_reload change what XAE has loaded for every client.
 const ASK_ACTIONS = {
-  xae: ["dialog_resolve"],
+  xae: ["dialog_resolve", "project_unload", "project_reload"],
   tc_system: ["set_netid"],
 };
 
@@ -124,7 +125,7 @@ export function decide(input, { lockFile, now = Date.now() } = {}) {
   if (confirm === DELETE_TOKEN) {
     result = { decision: "ask", reason: "te1000 guard: this call deletes XAE configuration; confirm with the user." };
   } else if (ASK_ACTIONS[tool]?.includes(action)) {
-    result = { decision: "ask", reason: `te1000 guard: ${tool} ${action} can affect what reaches the target; confirm with the user.` };
+    result = { decision: "ask", reason: `te1000 guard: ${tool} ${action} needs the user's yes every time (it can affect the target or what XAE has loaded); confirm with the user.` };
   } else if (tool === "tc_measurement" && action === "analytics_set" && OFFLINE_ANALYTICS_OPS.includes(args.op) && args.dryRun !== true) {
     result = { decision: "ask", reason: `te1000 guard: analytics_set ${args.op} unloads the System Manager project (or closes the solution) to edit the .tsproj on disk; confirm with the user.` };
   }

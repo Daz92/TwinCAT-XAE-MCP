@@ -111,8 +111,8 @@ namespace Te1000Daemon
             {
                 if (plan.Mode == "unload")
                 {
-                    if (!SelectProject(dte, plan.ProjectName)) throw new BridgeException("Project '" + plan.ProjectName + "' is not in Solution Explorer");
-                    dte.ExecuteCommand("Project.UnloadProject");
+                    if (!RunOnProjectNode(dte, plan.ProjectName, "Project.UnloadProject"))
+                        throw new BridgeException("Project '" + plan.ProjectName + "' or its Unload Project command is not available in Solution Explorer");
                     if (IsLoaded(dte, plan.TsprojPath))
                         throw new BridgeException("Project.UnloadProject ran but '" + plan.ProjectName + "' is still loaded");
                 }
@@ -134,11 +134,7 @@ namespace Te1000Daemon
             // Load it again whatever happened above.
             if (plan.Mode == "unload")
             {
-                if (SelectProject(dte, plan.ProjectName) && CommandAvailable(dte, "Project.ReloadProject"))
-                {
-                    dte.ExecuteCommand("Project.ReloadProject");
-                }
-                else if (!IsLoaded(dte, plan.TsprojPath))
+                if (!RunOnProjectNode(dte, plan.ProjectName, "Project.ReloadProject") && !IsLoaded(dte, plan.TsprojPath))
                 {
                     // No reload command for the node: reopen; everything was saved before the unload.
                     dte.Solution.Close(false);
@@ -394,6 +390,16 @@ namespace Te1000Daemon
             try { return (bool)dte.Commands.Item(name).IsAvailable; } catch { return false; }
         }
 
+        // Selects the project's node and runs a Solution Explorer project command
+        // (Project.UnloadProject / Project.ReloadProject) on it; false, with nothing
+        // run, when the node is not found or the command is not available for it.
+        internal static bool RunOnProjectNode(dynamic dte, string projectName, string command)
+        {
+            if (!SelectProject(dte, projectName) || !CommandAvailable(dte, command)) return false;
+            dte.ExecuteCommand(command);
+            return true;
+        }
+
         // Selects the project's node (also when shown as "<name> (unloaded)").
         private static bool SelectProject(dynamic dte, string projectName)
         {
@@ -421,7 +427,7 @@ namespace Te1000Daemon
 
         // True only when a project with this file still exposes its Object; an
         // unloaded project (or one Projects.Item cannot return) is not loaded.
-        private static bool IsLoaded(dynamic dte, string tsproj)
+        internal static bool IsLoaded(dynamic dte, string file)
         {
             var all = new List<dynamic>();
             try { XaeActions.CollectProjects(dte.Solution.Projects, all); }
@@ -429,7 +435,7 @@ namespace Te1000Daemon
             foreach (dynamic p in all)
             {
                 string full = ComHelpers.SafeStr(delegate { return p.FullName; });
-                if (full == null || !string.Equals(full, tsproj, StringComparison.OrdinalIgnoreCase)) continue;
+                if (full == null || !string.Equals(full, file, StringComparison.OrdinalIgnoreCase)) continue;
                 if (ComHelpers.Safe<object>(delegate { return (object)p.Object; }) != null) return true;
             }
             return false;
