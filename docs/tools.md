@@ -73,11 +73,12 @@ XAE shell and solution control.
 - `project_unload` (`projectPath`, `solutionPath?`) — Solution Explorer **Unload Project** on
   exactly one top-level solution project, matched like `save_project`. Refused when
   `Project.Saved` is not true (run `save_project` first) and for the System Manager `.tsproj`,
-  for which XAE offers no Unload Project (the offline `tc_measurement analytics_set` ops edit it).
-  Verified by the project no longer exposing its `Object`; returns
+  which must never be unloaded on its own: unloading only the System Manager project re-binds TF3500 streams to other task contexts and empties their symbols (live 2026-10-02). The offline `tc_measurement
+  analytics_set` ops edit it by closing and reopening the solution. Verified by the project's
+  unmodeled (unloaded) Kind; returns
   `{unloaded: true, project, uniqueName}`.
 - `project_reload` (`projectPath`, `solutionPath?`) — **Reload Project** on the unloaded node
-  (`<name> (unloaded)`), then waits up to 120 s for the project to expose its `Object` again;
+  (`<name> (unloaded)`), then waits up to 120 s for the project to load again;
   returns `{reloaded: true, project, uniqueName}`. Both ask the user under the guard.
 - `list_commands` (`filter` regex, `limit`) — discover available DTE command names.
 
@@ -329,11 +330,10 @@ it has seen and overwrites stream settings written to the stream item. They edit
 every open document must be saved (the call refuses and lists what is not). The System Manager
 project itself is saved by the call (`Project.Save`, which also writes the nested `.plcproj` and
 changed PLC files that EnvDTE `Project.Saved` does not report), reported as `savedBeforeClose`
-with `tsprojBeforeSave` / `tsprojAfterSave` stamps; then it is unloaded
-(`Project.UnloadProject`) or, if that is unavailable, the solution is closed, the file is
-edited (backup `<name>.tsproj.te1000-<UTC>.bak`, only the edited element's bytes change) and the project is reloaded or
-the solution reopened. The
-result reports `mode` (`unload` | `reopen`), `backup`, `plannedDiff` and `verified`; a
+with `tsprojBeforeSave` / `tsprojAfterSave` stamps; then the solution is closed, the file is
+edited (backup `<name>.tsproj.te1000-<UTC>.bak`, only the edited element's bytes change) and the
+solution reopened. The System Manager project is never unloaded on its own: unloading only the System Manager project re-binds TF3500 streams to other task contexts and empties their symbols (live 2026-10-02). The
+result reports `mode` (`reopen`), `backup`, `plannedDiff` and `verified`; a
 `dryRun` reports the mode and whether the edit applies, touching nothing.
 
 `stream_add` (`callerOid`, `name`, optional `copyFrom` = a `streamOid`, `targetId`, `fields`,

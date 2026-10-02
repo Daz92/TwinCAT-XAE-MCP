@@ -57,6 +57,12 @@ All notable changes to this project are documented here. The format is based on
   The te1000 guard asks the user before either op runs (not for `dryRun`).
 
 ### Fixed
+- Offline analytics edits (`target_remove`, `stream_edit`, `stream_add`, `stream_remove` fallback)
+  always close and reopen the solution. Once Solution Explorer selection worked, they picked
+  "unload" mode, and unloading only the System Manager project re-enumerated the PLC task
+  contexts: live 2026-10-02 TF3500 re-bound every stream to another task context, emptied all
+  `SymbolNames`, hid a context, and the damage was saved. Unload mode is removed; `project_unload`
+  keeps refusing the `.tsproj` for the same reason.
 - `analytics_get` / `analytics_set` find streams created in the XAE GUI since the last TIAN recalc:
   besides the TIAN `AdiOids` list they walk TIAN's context children (ItemType 103) and their
   streams (ItemType 102), keyed by the stream's own `AnalyticsStream/@Oid`.

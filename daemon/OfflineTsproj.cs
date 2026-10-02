@@ -15,8 +15,10 @@ namespace Te1000Daemon
     // 2026-10-01: with the solution saved, a tsproj edited while its project is
     // not loaded is read back by XAE/TF3500 on load.
     //
-    // Mode "unload": Solution Explorer Project.UnloadProject, edit, ReloadProject.
     // Mode "reopen": Solution.Close(false) (everything is saved), edit, Open.
+    // Never unload/reload only the System Manager project: live 2026-10-02 that
+    // re-enumerated the PLC task contexts, TF3500 re-bound every stream to another
+    // task context with its SymbolNames emptied, and the damage was saved.
     // The caller's edit is a pure text -> text function; it runs on the file's
     // decoded text and must change only the bytes it means to.
     internal static class OfflineTsproj
@@ -69,7 +71,7 @@ namespace Te1000Daemon
             plan.Project = sys;
             plan.TsprojPath = ComHelpers.SafeStr(delegate { return sys.FullName; });
             plan.ProjectName = ComHelpers.SafeStr(delegate { return sys.Name; });
-            plan.Mode = SelectProject(dte, plan.ProjectName) && CommandAvailable(dte, "Project.UnloadProject") ? "unload" : "reopen";
+            plan.Mode = "reopen";
             return plan;
         }
 
@@ -108,17 +110,7 @@ namespace Te1000Daemon
             result["fileWritten"] = false;
             try
             {
-                if (plan.Mode == "unload")
-                {
-                    if (!RunOnProjectNode(dte, plan.ProjectName, "Project.UnloadProject"))
-                        throw new BridgeException("Project '" + plan.ProjectName + "' or its Unload Project command is not available in Solution Explorer");
-                    if (IsLoaded(dte, plan.TsprojPath))
-                        throw new BridgeException("Project.UnloadProject ran but '" + plan.ProjectName + "' is still loaded");
-                }
-                else
-                {
-                    dte.Solution.Close(false);
-                }
+                dte.Solution.Close(false);
                 bool bom;
                 string edited = edit(Decode(original, out bom));
                 try { File.WriteAllBytes(plan.TsprojPath, Encode(edited, bom)); }
@@ -131,17 +123,7 @@ namespace Te1000Daemon
             }
 
             // Load it again whatever happened above.
-            if (plan.Mode == "unload")
-            {
-                if (!RunOnProjectNode(dte, plan.ProjectName, "Project.ReloadProject") && !IsLoaded(dte, plan.TsprojPath))
-                {
-                    // No reload command for the node: reopen; everything was saved before the unload.
-                    dte.Solution.Close(false);
-                    dte.Solution.Open(plan.SolutionPath);
-                    result["reloadedBy"] = "reopen";
-                }
-            }
-            else if (!SolutionOpen(dte))
+            if (!SolutionOpen(dte))
             {
                 dte.Solution.Open(plan.SolutionPath);
             }

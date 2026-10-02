@@ -522,7 +522,7 @@ namespace Te1000Daemon
         }
 
         // The top-level project projectPath names, matched as save_project matches.
-        // The System Manager .tsproj is refused: XAE offers no Unload Project for it.
+        // The System Manager .tsproj is refused: unloading only the System Manager project re-binds TF3500 streams to other task contexts and empties their symbols (live 2026-10-02).
         private static dynamic TopLevelProject(ActionContext ctx, dynamic dte, string solution, string nothing)
         {
             string wanted = ctx.Require("projectPath");
@@ -538,7 +538,7 @@ namespace Te1000Daemon
             dynamic project = MatchOneProject(top, wanted, solution, nothing, null);
             string file = ProjectFile(project, solution);
             if (file != null && file.EndsWith(".tsproj", StringComparison.OrdinalIgnoreCase))
-                throw new BridgeException("'" + wanted + "' is the System Manager .tsproj, for which XAE offers no Unload Project (" + nothing + "). " +
+                throw new BridgeException("'" + wanted + "' is the System Manager .tsproj, which must not be unloaded on its own because that breaks the TF3500 stream configuration (" + nothing + "). " +
                     "Offline .tsproj edits go through tc_measurement analytics_set (stream_add, stream_edit, stream_remove, target_remove), which unload and reload it themselves.");
             return project;
         }
