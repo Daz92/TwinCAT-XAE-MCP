@@ -42,6 +42,10 @@ namespace Te1000Daemon
             if (string.IsNullOrWhiteSpace(plan.SolutionPath)) throw new BridgeException("No solution is open");
             NoteUnsaved(plan, "solution " + plan.SolutionPath, delegate { return dte.Solution.Saved; });
 
+            // Project.Saved is not authoritative: live, the .tsproj read Saved=true
+            // while its Project.Save still wrote the nested .plcproj. PLC changes made
+            // without an open editor are therefore invisible here, and reopen mode's
+            // Solution.Close(false) would drop them; callers are told to save_all first.
             var all = new List<dynamic>();
             XaeActions.CollectProjects(dte.Solution.Projects, all);
             var tsprojs = new List<dynamic>();

@@ -64,9 +64,11 @@ XAE shell and solution control.
 - `save_project` (`projectPath`, `solutionPath?`) — `EnvDTE.Project.Save()` on exactly one project
   instead of File.SaveAll. `projectPath` is a full project file path or a `UniqueName`/`Name`
   matching exactly one project (solution folders included); zero or several matches refuse and
-  list the projects. `solutionPath`, when given, must be the open solution. Reports the saved
-  `file` with before/after on-disk stamps; `saved` is true only if the file changed on disk
-  (otherwise `saved: false, unchanged: true`). Nested projects reachable through `ProjectItems`
+  list the projects. A PLC project nested in the `.tsproj` (by PLC name or `.plcproj` path) is
+  refused naming that `.tsproj`, whose save also writes the PLC files. `solutionPath`, when given, must be the open solution. Reports the saved
+  `file` with before/after on-disk stamps; `saved` is true only if the project file or a project
+  file under its directory changed on disk (otherwise `saved: false, unchanged: true`); the
+  stamps are the authority, `projectSavedBefore/After` (EnvDTE `Project.Saved`) are not. Nested projects reachable through `ProjectItems`
   are searched too.
 - `list_commands` (`filter` regex, `limit`) — discover available DTE command names.
 
@@ -315,7 +317,9 @@ since the daemon's last read (`driftSinceLastCall`); re-read with `analytics_get
 list) cannot go through `ConsumeXml`: the TF3500 model behind `TIAN` never deletes targets
 it has seen and overwrites stream settings written to the stream item. They edit the saved
 `.tsproj` on disk instead, while XAE does not hold it: the solution, every project and every
-open document must be saved (the call refuses and lists what is not), then the System
+open document must be saved (the call refuses and lists what is not; EnvDTE `Project.Saved`
+stays true over unsaved nested PLC changes made without an open editor, which `reopen`'s
+`Solution.Close(false)` would drop, so run `save_all` first), then the System
 Manager project is unloaded (`Project.UnloadProject`) or, if that is unavailable, the
 solution is closed, the file is edited (backup `<name>.tsproj.te1000-<UTC>.bak`, only the
 edited element's bytes change) and the project is reloaded or the solution reopened. The
