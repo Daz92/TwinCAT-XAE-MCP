@@ -1390,29 +1390,40 @@ namespace Te1000Daemon
         }
 
         // ---- New-PlcPouVInfo (L2652-2724) -----------------------------------
+        // vInfo shapes follow ITcSmTreeItem::CreateChild and the TC3 Automation
+        // Interface manual v1.7.0 pp.229-231: a scalar language, or a string[]
+        // whose first element is the language as text. XAE rejects a SAFEARRAY
+        // of VARIANT (object[]) outright: "The specified vInfo (Type: Object[])
+        // is not supported for creating TreeItem type 'TREEITEMTYPE_PLCMETHOD'".
         private static object BuildVInfo(int subType, int language, string returnType, string extends, string implements, string declText)
         {
+            string lang = language.ToString(CultureInfo.InvariantCulture);
             switch (subType)
             {
                 case 603:
                     if (string.IsNullOrWhiteSpace(returnType)) throw new BridgeException("returnType is required for Function (subType 603)");
-                    return new object[] { language, returnType };
+                    return new string[] { lang, returnType };
                 case 611:
                     if (string.IsNullOrWhiteSpace(returnType)) throw new BridgeException("returnType is required for Property (subType 611)");
-                    return new object[] { language, returnType };
+                    return new string[] { lang, returnType };
                 case 604:
                 case 602:
                 {
-                    var info = new List<object>();
-                    info.Add(language);
+                    if (string.IsNullOrWhiteSpace(extends) && string.IsNullOrWhiteSpace(implements)) return language;
+                    var info = new List<string>();
+                    info.Add(lang);
                     if (!string.IsNullOrWhiteSpace(extends)) { info.Add("Extends"); info.Add(extends); }
                     if (!string.IsNullOrWhiteSpace(implements)) { info.Add("Implements"); info.Add(implements); }
                     return info.ToArray();
                 }
-                case 608:
                 case 609:
+                    if (!string.IsNullOrWhiteSpace(returnType)) return new string[] { lang, returnType };
+                    if (language == 1) return null;
+                    return language;
+                case 608:
                 case 616:
-                    return new object[] { language };
+                    if (language == 1) return null;
+                    return language;
                 case 618:
                     if (string.IsNullOrWhiteSpace(extends)) return null;
                     return extends;
