@@ -375,16 +375,18 @@ namespace Te1000Daemon
         //    target removed from the XML returns on the next model republish, and a
         //    stream Config written to the stream item is overwritten. The only
         //    importer of stream Config (ConfigModel.Import via the ImportConfiguration
-        //    command) opens a file dialog. target_remove and stream_edit therefore do
-        //    not go through ConsumeXml: they edit the saved .tsproj on disk while the
+        //    command) opens a file dialog. target_remove, stream_edit and stream_add
+        //    (CreateChild on a context: E_NOTIMPL; ConsumeXml <AddStream/>: ignored)
+        //    therefore do not go through ConsumeXml, nor does stream_remove when
+        //    DeleteChild fails: they edit the saved .tsproj on disk while the
         //    project is unloaded (or the solution closed) and TF3500 rebuilds its
         //    model from the file on load (OfflineTsproj; proven live 2026-10-01).
         // Every write is read-modify-write of the FULL produced XML inside the
         // daemon (a partial TIAN ConsumeXml replaced the whole Config and wiped all
         // targets). Credentials never leave the daemon: MQTT settings are redacted
         // to a whitelist on every output. Verified live: logger_enable, target_add,
-        // target_edit, context_hide. stream_add, stream_remove and the offline
-        // target_remove/stream_edit paths are not.
+        // target_edit, context_hide, offline target_remove/stream_edit. The offline
+        // stream_add and stream_remove (live DeleteChild or offline) are not.
 
         private const string RedactedValue = "<redacted>";
         private static readonly string[] MqttSafeLeaves = new string[] {
@@ -914,7 +916,7 @@ namespace Te1000Daemon
                     " keys, e.g. '" + ((Json.JObj)drift[0]).Str("key") + "'): XAE's Analytics model may have republished an older state. Inspect with analytics_get, then re-run with acceptDrift:true.");
             }
 
-            if (op == "stream_add") return StreamAdd(ctx, sm, before, result);
+            if (op == "stream_add") return StreamAddOffline(ctx, before, result);
             if (op == "stream_remove") return StreamRemove(ctx, sm, before, result);
             if (op == "target_remove") return TargetRemoveOffline(ctx, before, result);
             if (op == "stream_edit") return StreamEditOffline(ctx, before, result);
@@ -1037,134 +1039,17 @@ namespace Te1000Daemon
             return result;
         }
 
-        // Context item: a stream's Parent (works while the context is hidden), else
-        // LookupTreeItem('TIAN^<ItemName>') when the name is unique (needs Hide=false).
-        private static dynamic ResolveContextItem(dynamic sm, AlySnapshot s, string callerOid)
-        {
-            foreach (AlyStream st in s.Streams)
-            {
-                if (st.CallerOid != callerOid) continue;
-                dynamic parent = null;
-                try { parent = st.Item.Parent; } catch { parent = null; }
-                if (parent != null) return parent;
-            }
-            XmlElement c = FindContext(s.TianDoc, callerOid);
-            string name = Text(c, "ItemName");
-            int same = 0;
-            foreach (XmlElement o in Contexts(s.TianDoc)) if (Text(o, "ItemName") == name) same++;
-            dynamic item = same == 1 ? ComHelpers.TryGetTreeItem(sm, "TIAN^" + name) : null;
-            if (item == null)
-            {
-                throw new BridgeException("StreamContext " + callerOid + " ('" + name + "') is not addressable: it has no stream to reach it through" +
-                    (same > 1 ? " and its ItemName is shared by " + same.ToString(CultureInfo.InvariantCulture) + " contexts" : " and is hidden (Hide=" + c.GetAttribute("Hide") + ")") +
-                    ". Select the source first (op=context_hide hide=false), or add the first stream in XAE.");
-            }
-            return item;
-        }
-
-        // stream_add (EXPERIMENTAL): CreateChild(name, subType=0) on the context
-        // item, ghost-guarded (must come back ItemType 102 named <name>). Live,
-        // CreateChild on a stream context throws E_NOTIMPL; then ConsumeXml of
-        // <AddStream Name IsEventBased/> on the context item, the form TF3500
-        // itself uses (StreamContextModel.CreateStreamProgrammatically). No Oid
-        // is sent: the daemon has no OID allocator, so TF3500 must assign one
-        // (unverified). `via` reports which path ran; verified comes from the
-        // post-settle read either way.
-        private static Json.JObj StreamAdd(ActionContext ctx, dynamic sm, AlySnapshot before, Json.JObj result)
-        {
-            Json.JObj p = ctx.Payload;
-            string callerOid = NormOid(ctx.Require("callerOid"));
-            string name = ctx.Require("name");
-            int subType = p.Int("subType", 0);
-            foreach (AlyStream st in before.Streams)
-            {
-                if (st.CallerOid == callerOid && st.Name == name) throw new BridgeException("Context " + callerOid + " already has a stream named '" + name + "' (" + st.Oid + ").");
-            }
-            dynamic ctxItem = ResolveContextItem(sm, before, callerOid);
-            string ctxPath = ComHelpers.SafeStr(delegate { return ctxItem.PathName; });
-            result["contextPath"] = ctxPath;
-            result["name"] = name;
-            result["subType"] = subType;
-            if (IsDryRun(p)) { result["written"] = false; return result; }
-
-            var beforeFlat = FlattenAll(before.TianDoc, before.Streams);
-            dynamic child = null;
-            bool notImpl = false;
-            try { child = ctxItem.CreateChild(name, subType, "", null); }
-            catch (Exception ex)
-            {
-                const int ENotImpl = unchecked((int)0x80004001);
-                if (!(ex is NotImplementedException) && ex.HResult != ENotImpl && (ex.InnerException == null || ex.InnerException.HResult != ENotImpl)) throw;
-                notImpl = true;
-            }
-            if (notImpl)
-            {
-                var x = new XmlDocument();
-                XmlElement add = x.CreateElement("AddStream");
-                add.SetAttribute("Name", name);
-                add.SetAttribute("IsEventBased", "false");
-                x.AppendChild(x.CreateElement("TreeItem")).AppendChild(add);
-                ComHelpers.ConsumeXml(ctxItem, x.OuterXml);
-                result["via"] = "consumeXml";
-            }
-            else
-            {
-                string actual = child == null ? null : ComHelpers.SafeStr(delegate { return child.Name; });
-                int type = child == null ? -1 : ComHelpers.SafeInt(delegate { return child.ItemType; }, -1);
-                if (child == null || actual != name || type != 102)
-                {
-                    if (!string.IsNullOrWhiteSpace(actual)) { try { ctxItem.DeleteChild(actual); } catch { } }
-                    throw new BridgeException("CreateChild('" + name + "', " + subType.ToString(CultureInfo.InvariantCulture) + ") under '" + ctxPath + "' did not produce an Analytics stream (got " +
-                        (child == null ? "null" : "name='" + actual + "', itemType=" + type.ToString(CultureInfo.InvariantCulture)) + "); any stray child was deleted. Add the stream in XAE (Stream Sources tab) instead.");
-                }
-                result["via"] = "createChild";
-                result["created"] = ComHelpers.ConvertTreeItem(child);
-            }
-            ctx.Cache.Invalidate("TIAN");
-            Json.JObj r = Finish(sm, p, beforeFlat, null, result);
-            // Verified = a stream OID absent before is present, under this
-            // context and with this name, in the post-settle read (_lastSeen).
-            string newOid = null;
-            foreach (var kv in _lastSeen)
-            {
-                if (!kv.Key.StartsWith("stream[", StringComparison.Ordinal) || !kv.Key.EndsWith("].Name", StringComparison.Ordinal)) continue;
-                if (beforeFlat.ContainsKey(kv.Key) || kv.Value[0] != name) continue;
-                string ent = kv.Key.Substring(0, kv.Key.Length - ".Name".Length);
-                string[] caller;
-                if (!_lastSeen.TryGetValue(ent + ".CallerOid", out caller) || caller[0] != callerOid) continue;
-                newOid = ent.Substring("stream[".Length, ent.Length - "stream[".Length - 1);
-            }
-            r["streamOid"] = newOid;
-            r["verified"] = newOid != null;
-            return r;
-        }
-
-        // stream_remove (unverified live): DeleteChild(<stream name>) on the
-        // stream's Parent (the context item), then confirm the OID is gone.
-        private static Json.JObj StreamRemove(ActionContext ctx, dynamic sm, AlySnapshot before, Json.JObj result)
-        {
-            AlyStream st = FindStream(before, ctx.Payload);
-            dynamic parent = st.Item.Parent;
-            result["stream"] = StreamModel(st, false);
-            result["contextPath"] = ComHelpers.SafeStr(delegate { return parent.PathName; });
-            if (IsDryRun(ctx.Payload)) { result["written"] = false; return result; }
-            var beforeFlat = FlattenAll(before.TianDoc, before.Streams);
-            parent.DeleteChild(st.Name);
-            ctx.Cache.Invalidate("TIAN");
-            Json.JObj r = Finish(sm, ctx.Payload, beforeFlat, null, result);
-            // Diff collapses a removed stream to one "stream[<oid>]" entry, so check
-            // the post-settle read (_lastSeen) directly.
-            r["verified"] = !_lastSeen.ContainsKey("stream[" + st.Oid + "].Name");
-            return r;
-        }
-
-        // ---- target_remove / stream_edit: offline .tsproj edit ---------------
-        // TF3500's model never drops a target that TIAN XML omits and republishes
-        // stream Config over the stream item, so these two ops edit the .tsproj on
-        // disk while XAE does not hold it (OfflineTsproj) and let TF3500 rebuild its
-        // model from the file on load. Disk layout (element names only):
+        // ---- target_remove / stream_edit / stream_add / stream_remove: offline ----
+        // TF3500's model never drops a target that TIAN XML omits, republishes
+        // stream Config over the stream item and has no working stream create, so
+        // these ops edit the .tsproj on disk while XAE does not hold it
+        // (OfflineTsproj) and let TF3500 rebuild its model from the file on load.
+        // Disk layout (element names only):
         //   TcSmProject/Project/Analytics/Config/StreamTargets/StreamTargetItem[@Id]
-        //   TcSmProject/Project/Analytics/StreamContext[@CallerOid]/Stream[@Id,@oid]/Config/<field>
+        //   TcSmProject/Project/Analytics/StreamContext[@CallerOid,@Hide?]/Stream[@Id,@oid,@eventBased]/{Name,ImageId,Config/<field>}
+        // @Id is #x%08x and @oid #x%x of one OID; Config/ClientID ends _0x<OID> and
+        // Config/{StreamStartSettings,StreamStopSettings,BackupConditionSettings}/
+        // RefStreamOid is 0x<OID> of the stream itself.
         private const string DiskAnalytics = "/TcSmProject/Project/Analytics";
         private static readonly System.Text.RegularExpressions.Regex FieldName =
             new System.Text.RegularExpressions.Regex("^[A-Za-z_][A-Za-z0-9_]*$");
@@ -1218,65 +1103,23 @@ namespace Te1000Daemon
 
         private static Json.JObj StreamEditOffline(ActionContext ctx, AlySnapshot before, Json.JObj result)
         {
-            Json.JObj p = ctx.Payload;
-            AlyStream st = FindStream(before, p);
+            AlyStream st = FindStream(before, ctx.Payload);
             var edits = new List<KeyValuePair<string[], string>>();
-            Json.JObj fields = p.Obj("fields");
-            if (fields != null) FieldEdits(fields, new List<string>(), edits);
-            List<string> symbols = null;
-            if (p.Arr("symbols") != null)
-            {
-                symbols = new List<string>();
-                foreach (object o in p.Arr("symbols")) symbols.Add(Convert.ToString(o, CultureInfo.InvariantCulture));
-                edits.Add(new KeyValuePair<string[], string>(new string[] { "SymbolNames" }, EncodeSymbols(symbols)));
-            }
+            List<string> symbols = UserStreamEdits(ctx.Payload, before, edits);
             if (edits.Count == 0) throw new BridgeException("fields or symbols is required");
 
             var beforeFlat = FlattenAll(before.TianDoc, before.Streams);
             var plannedFlat = new Dictionary<string, string[]>(beforeFlat);
-            var planned = new Dictionary<string, string>(); // flat key -> planned raw value
-            for (int i = 0; i < edits.Count; i++)
-            {
-                string[] path = edits[i].Key;
-                string value = edits[i].Value;
-                if (path.Length == 1 && path[0] == "TargetId")
-                {
-                    value = NormGuid(value);
-                    FindTarget(before.TianDoc, value);
-                    edits[i] = new KeyValuePair<string[], string>(path, value);
-                }
-                string key = "stream[" + st.Oid + "]." + string.Join(".", path);
-                string raw = path.Length == 1 && path[0] == "SymbolNames" ? string.Join(",", symbols.ToArray()) : value;
-                string[] old;
-                bool secret = beforeFlat.TryGetValue(key, out old) && old[1] == RedactedValue;
-                plannedFlat[key] = new string[] { raw, secret ? RedactedValue : raw };
-                planned[key] = raw;
-            }
+            Dictionary<string, string> planned = PlanStreamEdits("stream[" + st.Oid + "]", edits, symbols, plannedFlat);
             result["streamOid"] = st.Oid;
 
             Func<string, string> edit = delegate(string t)
             {
                 int[] at = LocateDiskStream(OfflineTsproj.LoadDom(t), st, result);
-                string edited = t;
-                foreach (var e in edits)
-                {
-                    OfflineTsproj.Span a = OfflineTsproj.Root(edited, "Analytics");
-                    OfflineTsproj.Span s = OfflineTsproj.Child(edited, OfflineTsproj.Child(edited, a, "StreamContext", at[0]), "Stream", at[1]);
-                    OfflineTsproj.Span cur = OfflineTsproj.Child(edited, s, "Config", 0);
-                    foreach (string part in e.Key) cur = OfflineTsproj.Child(edited, cur, part, 0);
-                    edited = OfflineTsproj.SetLeaf(edited, cur, e.Value);
-                }
+                string edited = SetConfigLeaves(t, edits, delegate(string x) { return DiskStreamSpan(x, at); });
                 OfflineTsproj.AssertPlanned(t, edited, delegate(XmlDocument d)
                 {
-                    XmlNode stream = d.SelectNodes(DiskAnalytics + "/StreamContext")[at[0]].SelectNodes("Stream")[at[1]];
-                    foreach (var e in edits)
-                    {
-                        XmlElement cur = (XmlElement)stream.SelectSingleNode("Config");
-                        foreach (string part in e.Key) cur = (XmlElement)cur.SelectSingleNode(part);
-                        // SetLeaf keeps <X/> for an empty value; so does the plan.
-                        if (e.Value.Length == 0 && cur.IsEmpty) continue;
-                        cur.InnerText = e.Value;
-                    }
+                    PlanConfigLeaves(d.SelectNodes(DiskAnalytics + "/StreamContext")[at[0]].SelectNodes("Stream")[at[1]], edits);
                 });
                 return edited;
             };
@@ -1291,6 +1134,284 @@ namespace Te1000Daemon
                 }
                 return true;
             });
+        }
+
+        // stream_add: offline. CreateChild on a stream context throws E_NOTIMPL live
+        // and ConsumeXml <AddStream/> on it is silently ignored, so the new Stream is
+        // written into the saved .tsproj: a clone of an existing disk Stream (copyFrom,
+        // else one in the same context, else any) with a fresh OID, the new Name, the
+        // OID-bearing leaves rewritten (ClientID '<ams>_<context>_<name>_0x<OID>',
+        // RefStreamOid of the start/stop/backup conditions that pointed at the
+        // source), then targetId/fields/symbols. A hidden target context loses its
+        // Hide attribute: on disk every context with a stream is visible and carries
+        // no Hide. No other OID registry exists on disk (TIAN AdiOids is runtime only).
+        private static Json.JObj StreamAddOffline(ActionContext ctx, AlySnapshot before, Json.JObj result)
+        {
+            Json.JObj p = ctx.Payload;
+            string callerOid = NormOid(ctx.Require("callerOid"));
+            string name = ctx.Require("name");
+            XmlElement liveCtx = FindContext(before.TianDoc, callerOid);
+            foreach (AlyStream st in before.Streams)
+            {
+                if (st.CallerOid == callerOid && st.Name == name) throw new BridgeException("Context " + callerOid + " already has a stream named '" + name + "' (" + st.Oid + ").");
+            }
+            AlyStream src = null;
+            if (p.Truthy("copyFrom"))
+            {
+                var q = new Json.JObj();
+                q["streamOid"] = p.Str("copyFrom");
+                src = FindStream(before, q);
+            }
+            else
+            {
+                foreach (AlyStream st in before.Streams) if (st.CallerOid == callerOid) { src = st; break; }
+                if (src == null && before.Streams.Count > 0) src = before.Streams[0];
+            }
+            if (src == null) throw new BridgeException("No existing stream to clone the Config from; add the first stream in XAE.");
+
+            // OID: highest stream OID in the 0x0204xxxx range + 1 (no allocator or
+            // counter exists in the file); the edit refuses if the saved file holds one
+            // at or above it.
+            uint max = 0;
+            foreach (AlyStream st in before.Streams)
+            {
+                uint v = OidValue(st.Oid);
+                if ((v & 0xFFFF0000u) == 0x02040000u && v > max) max = v;
+            }
+            if (max == 0) throw new BridgeException("No stream OID in the 0x0204xxxx range to allocate the next one from.");
+            uint nv = max + 1;
+            string newOid = NormOid("0x" + nv.ToString("x8", CultureInfo.InvariantCulture));
+            string refOid = "0x" + nv.ToString("X8", CultureInfo.InvariantCulture);
+            string srcPrefix = "stream[" + src.Oid + "]";
+            string dstPrefix = "stream[" + newOid + "]";
+            bool hidden = liveCtx.GetAttribute("Hide").Trim() == "true";
+
+            var beforeFlat = FlattenAll(before.TianDoc, before.Streams);
+            var edits = new List<KeyValuePair<string[], string>>();
+            Json.JObj fields = p.Obj("fields");
+            string[] cid;
+            if ((fields == null || !fields.Has("ClientID")) && beforeFlat.TryGetValue(srcPrefix + ".ClientID", out cid))
+            {
+                string tail = "_" + Text(FindContext(before.TianDoc, src.CallerOid), "ItemName") + "_" + src.Name + "_";
+                int at = cid[0].LastIndexOf(tail, StringComparison.Ordinal);
+                if (at <= 0 || NormOid(cid[0].Substring(at + tail.Length)) != src.Oid)
+                    throw new BridgeException("Stream " + src.Oid + " ClientID is not '<ams>_<context>_<name>_<oid>'; pass fields.ClientID for the new stream.");
+                edits.Add(new KeyValuePair<string[], string>(new string[] { "ClientID" }, cid[0].Substring(0, at) + "_" + Text(liveCtx, "ItemName") + "_" + name + "_" + refOid));
+            }
+            foreach (var kv in beforeFlat)
+            {
+                if (!kv.Key.StartsWith(srcPrefix + ".", StringComparison.Ordinal) || !kv.Key.EndsWith(".RefStreamOid", StringComparison.Ordinal)) continue;
+                if (NormOid(kv.Value[0]) != src.Oid) continue;
+                edits.Add(new KeyValuePair<string[], string>(kv.Key.Substring(srcPrefix.Length + 1).Split('.'), refOid));
+            }
+            if (p.Truthy("targetId")) edits.Add(new KeyValuePair<string[], string>(new string[] { "TargetId" }, p.Str("targetId")));
+            List<string> symbols = UserStreamEdits(p, before, edits);
+
+            var plannedFlat = new Dictionary<string, string[]>(beforeFlat);
+            foreach (var kv in beforeFlat)
+            {
+                if (kv.Key.StartsWith(srcPrefix + ".", StringComparison.Ordinal)) plannedFlat[dstPrefix + kv.Key.Substring(srcPrefix.Length)] = kv.Value;
+            }
+            plannedFlat[dstPrefix + ".Name"] = new string[] { name, name };
+            plannedFlat[dstPrefix + ".CallerOid"] = new string[] { callerOid, callerOid };
+            if (hidden) plannedFlat["context[" + callerOid + "].Hide"] = new string[] { "false", "false" };
+            PlanStreamEdits(dstPrefix, edits, symbols, plannedFlat);
+            result["streamOid"] = newOid;
+            result["callerOid"] = callerOid;
+            result["name"] = name;
+            result["copyFrom"] = src.Oid;
+            result["unhide"] = hidden;
+
+            Func<string, string> edit = delegate(string t)
+            {
+                XmlDocument dom = OfflineTsproj.LoadDom(t);
+                int[] at = LocateDiskStream(dom, src, result);
+                List<XmlElement> contexts = Elements(dom, DiskAnalytics + "/StreamContext");
+                int ci = -1;
+                for (int i = 0; i < contexts.Count; i++)
+                {
+                    if (NormOid(contexts[i].GetAttribute("CallerOid")) != callerOid) continue;
+                    if (ci >= 0) throw new BridgeException("StreamContext " + callerOid + " appears twice in the .tsproj");
+                    ci = i;
+                }
+                if (ci < 0) throw new BridgeException("StreamContext " + callerOid + " is not in the .tsproj");
+                foreach (XmlElement s in Elements(dom, DiskAnalytics + "/StreamContext/Stream"))
+                {
+                    if (OidValue(NormOid(s.GetAttribute("Id"))) >= nv || OidValue(NormOid(s.GetAttribute("oid"))) >= nv)
+                        throw new BridgeException("The saved .tsproj already holds a stream OID at or above " + newOid + "; save the solution and re-run.");
+                }
+                bool unhide = contexts[ci].GetAttribute("Hide").Trim() == "true";
+
+                OfflineTsproj.Span from = DiskStreamSpan(t, at);
+                string s0 = t.Substring(from.Start, from.End - from.Start);
+                s0 = OfflineTsproj.SetAttribute(s0, OfflineTsproj.ReadElement(s0, 0), "Id", "#x" + nv.ToString("x8", CultureInfo.InvariantCulture));
+                s0 = OfflineTsproj.SetAttribute(s0, OfflineTsproj.ReadElement(s0, 0), "oid", "#x" + nv.ToString("x", CultureInfo.InvariantCulture));
+                s0 = OfflineTsproj.SetLeaf(s0, OfflineTsproj.Child(s0, OfflineTsproj.ReadElement(s0, 0), "Name", 0), name);
+                s0 = SetConfigLeaves(s0, edits, delegate(string x) { return OfflineTsproj.ReadElement(x, 0); });
+
+                List<OfflineTsproj.Span> kids = OfflineTsproj.Children(t, DiskContextSpan(t, ci));
+                if (kids.Count == 0) throw new BridgeException("StreamContext " + callerOid + " has no child elements in the .tsproj");
+                string edited = OfflineTsproj.InsertAfter(t, kids[kids.Count - 1], s0);
+                if (unhide) edited = OfflineTsproj.SetAttribute(edited, DiskContextSpan(edited, ci), "Hide", null);
+                OfflineTsproj.AssertPlanned(t, edited, delegate(XmlDocument d)
+                {
+                    XmlElement clone = (XmlElement)d.SelectNodes(DiskAnalytics + "/StreamContext")[at[0]].SelectNodes("Stream")[at[1]].CloneNode(true);
+                    clone.SetAttribute("Id", "#x" + nv.ToString("x8", CultureInfo.InvariantCulture));
+                    clone.SetAttribute("oid", "#x" + nv.ToString("x", CultureInfo.InvariantCulture));
+                    clone.SelectSingleNode("Name").InnerText = name;
+                    PlanConfigLeaves(clone, edits);
+                    XmlElement dc = (XmlElement)d.SelectNodes(DiskAnalytics + "/StreamContext")[ci];
+                    dc.AppendChild(clone);
+                    if (unhide) dc.RemoveAttribute("Hide");
+                });
+                return edited;
+            };
+            return RunOffline(ctx, result, beforeFlat, plannedFlat, edit, delegate(Dictionary<string, string[]> after)
+            {
+                string[] n; string[] c;
+                return after.TryGetValue(dstPrefix + ".Name", out n) && n[0] == name &&
+                    after.TryGetValue(dstPrefix + ".CallerOid", out c) && c[0] == callerOid;
+            });
+        }
+
+        // stream_remove: DeleteChild(<stream name>) on the stream's Parent (the
+        // context item; unproven live). If it throws, or the post-settle read still
+        // has the stream, the Stream element is removed from the saved .tsproj
+        // offline instead (its ClientID and RefStreamOid live inside it; nothing else
+        // on disk registers the OID). Refused while another stream's start/stop/backup
+        // condition references it. `via` = deleteChild | offline. dryRun checks the
+        // offline edit.
+        private static Json.JObj StreamRemove(ActionContext ctx, dynamic sm, AlySnapshot before, Json.JObj result)
+        {
+            Json.JObj p = ctx.Payload;
+            AlyStream st = FindStream(before, p);
+            string prefix = "stream[" + st.Oid + "]";
+            var beforeFlat = FlattenAll(before.TianDoc, before.Streams);
+            foreach (var kv in beforeFlat)
+            {
+                if (kv.Key.EndsWith(".RefStreamOid", StringComparison.Ordinal) && !kv.Key.StartsWith(prefix + ".", StringComparison.Ordinal) && NormOid(kv.Value[0]) == st.Oid)
+                    throw new BridgeException("Stream " + st.Oid + " is referenced by " + kv.Key + "; change that condition first (stream_edit).");
+            }
+            dynamic parent = ComHelpers.Safe<object>(delegate { return (object)st.Item.Parent; });
+            result["stream"] = StreamModel(st, false);
+            result["contextPath"] = parent == null ? null : ComHelpers.SafeStr(delegate { return parent.PathName; });
+            if (!IsDryRun(p))
+            {
+                bool deleted = false;
+                try { parent.DeleteChild(st.Name); deleted = true; }
+                catch (Exception ex) { result["deleteChildError"] = ex.Message; }
+                if (deleted)
+                {
+                    ctx.Cache.Invalidate("TIAN");
+                    Json.JObj r = Finish(sm, p, beforeFlat, null, result);
+                    // Diff collapses a removed stream to one "stream[<oid>]" entry, so check
+                    // the post-settle read (_lastSeen) directly.
+                    if (!_lastSeen.ContainsKey(prefix + ".Name")) { r["via"] = "deleteChild"; r["verified"] = true; return r; }
+                    result["deleteChildLeftStream"] = true;
+                }
+                result["via"] = "offline";
+            }
+
+            var plannedFlat = new Dictionary<string, string[]>();
+            foreach (var kv in beforeFlat) if (!kv.Key.StartsWith(prefix + ".", StringComparison.Ordinal)) plannedFlat[kv.Key] = kv.Value;
+            Func<string, string> edit = delegate(string t)
+            {
+                int[] at = LocateDiskStream(OfflineTsproj.LoadDom(t), st, result);
+                string edited = OfflineTsproj.RemoveElement(t, DiskStreamSpan(t, at));
+                OfflineTsproj.AssertPlanned(t, edited, delegate(XmlDocument d)
+                {
+                    XmlNode e = d.SelectNodes(DiskAnalytics + "/StreamContext")[at[0]].SelectNodes("Stream")[at[1]];
+                    e.ParentNode.RemoveChild(e);
+                });
+                return edited;
+            };
+            return RunOffline(ctx, result, beforeFlat, plannedFlat, edit, delegate(Dictionary<string, string[]> after)
+            {
+                return !after.ContainsKey(prefix + ".Name");
+            });
+        }
+
+        private static uint OidValue(string normOid)
+        {
+            uint v;
+            return normOid != null && normOid.StartsWith("0x", StringComparison.Ordinal) &&
+                uint.TryParse(normOid.Substring(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out v) ? v : 0;
+        }
+
+        private static OfflineTsproj.Span DiskContextSpan(string t, int ci)
+        {
+            return OfflineTsproj.Child(t, OfflineTsproj.Root(t, "Analytics"), "StreamContext", ci);
+        }
+
+        private static OfflineTsproj.Span DiskStreamSpan(string t, int[] at)
+        {
+            return OfflineTsproj.Child(t, DiskContextSpan(t, at[0]), "Stream", at[1]);
+        }
+
+        // fields and symbols -> edits under the stream Config, appended to edits;
+        // every TargetId edit is normalised and must name an existing target.
+        // Returns the symbol list (null when not given).
+        private static List<string> UserStreamEdits(Json.JObj p, AlySnapshot before, List<KeyValuePair<string[], string>> edits)
+        {
+            Json.JObj fields = p.Obj("fields");
+            if (fields != null) FieldEdits(fields, new List<string>(), edits);
+            List<string> symbols = null;
+            if (p.Arr("symbols") != null)
+            {
+                symbols = new List<string>();
+                foreach (object o in p.Arr("symbols")) symbols.Add(Convert.ToString(o, CultureInfo.InvariantCulture));
+                edits.Add(new KeyValuePair<string[], string>(new string[] { "SymbolNames" }, EncodeSymbols(symbols)));
+            }
+            for (int i = 0; i < edits.Count; i++)
+            {
+                if (edits[i].Key.Length != 1 || edits[i].Key[0] != "TargetId") continue;
+                string id = NormGuid(edits[i].Value);
+                FindTarget(before.TianDoc, id);
+                edits[i] = new KeyValuePair<string[], string>(edits[i].Key, id);
+            }
+            return symbols;
+        }
+
+        // Writes the planned flat values of edits on the stream at prefix into
+        // plannedFlat (a secret stays redacted); returns flat key -> planned raw.
+        private static Dictionary<string, string> PlanStreamEdits(string prefix, List<KeyValuePair<string[], string>> edits, List<string> symbols, Dictionary<string, string[]> plannedFlat)
+        {
+            var planned = new Dictionary<string, string>();
+            foreach (var e in edits)
+            {
+                string key = prefix + "." + string.Join(".", e.Key);
+                string raw = e.Key.Length == 1 && e.Key[0] == "SymbolNames" ? string.Join(",", symbols.ToArray()) : e.Value;
+                string[] old;
+                bool secret = plannedFlat.TryGetValue(key, out old) && old[1] == RedactedValue;
+                plannedFlat[key] = new string[] { raw, secret ? RedactedValue : raw };
+                planned[key] = raw;
+            }
+            return planned;
+        }
+
+        // Text: each edit's leaf under <Config> of the Stream that stream(text) locates.
+        private static string SetConfigLeaves(string t, List<KeyValuePair<string[], string>> edits, Func<string, OfflineTsproj.Span> stream)
+        {
+            foreach (var e in edits)
+            {
+                OfflineTsproj.Span cur = OfflineTsproj.Child(t, stream(t), "Config", 0);
+                foreach (string part in e.Key) cur = OfflineTsproj.Child(t, cur, part, 0);
+                t = OfflineTsproj.SetLeaf(t, cur, e.Value);
+            }
+            return t;
+        }
+
+        // DOM: the same edits on a Stream element.
+        private static void PlanConfigLeaves(XmlNode stream, List<KeyValuePair<string[], string>> edits)
+        {
+            foreach (var e in edits)
+            {
+                XmlElement cur = (XmlElement)stream.SelectSingleNode("Config");
+                foreach (string part in e.Key) cur = (XmlElement)cur.SelectSingleNode(part);
+                // SetLeaf keeps <X/> for an empty value; so does the plan.
+                if (e.Value.Length == 0 && cur.IsEmpty) continue;
+                cur.InnerText = e.Value;
+            }
         }
 
         // The stream's element on disk: the Stream whose @Id or @oid is the live OID,

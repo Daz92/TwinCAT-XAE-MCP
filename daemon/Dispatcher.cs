@@ -530,9 +530,11 @@ namespace Te1000Daemon
                 if (t > 0) return t;
             }
             if (action != null && LongRunningActions.Contains(action)) return LongTimeoutMs;
-            // These two unload/reload or close/reopen the System Manager project.
+            // These unload/reload or close/reopen the System Manager project (stream_remove
+            // only when DeleteChild fails, but the budget is set before the call).
+            string op = payload.Str("op");
             if (action == "analytics_config_set" && !payload.Bool("dryRun", false) &&
-                (payload.Str("op") == "target_remove" || payload.Str("op") == "stream_edit")) return LongTimeoutMs;
+                (op == "target_remove" || op == "stream_edit" || op == "stream_add" || op == "stream_remove")) return LongTimeoutMs;
             return DefaultTimeoutMs;
         }
 

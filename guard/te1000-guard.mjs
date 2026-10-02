@@ -47,8 +47,9 @@ const ASK_ACTIONS = {
 };
 
 // analytics_set ops that unload/reload the System Manager project or close/reopen the
-// solution to edit the .tsproj on disk. A dryRun touches nothing and passes.
-const OFFLINE_ANALYTICS_OPS = ["target_remove", "stream_edit"];
+// solution to edit the .tsproj on disk (stream_remove only when its live DeleteChild fails).
+// A dryRun touches nothing and passes.
+const OFFLINE_ANALYTICS_OPS = ["target_remove", "stream_edit", "stream_add", "stream_remove"];
 
 const DELETE_TOKEN = "ALLOW_TWINCAT_DELETE";
 

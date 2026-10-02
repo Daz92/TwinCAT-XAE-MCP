@@ -946,7 +946,7 @@ server.registerTool(
           ...base, op: p.op, dryRun: p.dryRun === true, contextsMode: p.contextsMode,
           enabled: p.enabled, targetId: p.targetId, copyFrom: p.copyFrom, fields: p.fields,
           callerOid: p.callerOid, hide: p.hide, stream: p.stream, streamOid: p.streamOid, symbols: p.symbols,
-          name: p.name, subType: p.subType, acceptDrift: p.acceptDrift === true, settleMs: p.settleMs,
+          name: p.name, acceptDrift: p.acceptDrift === true, settleMs: p.settleMs,
         }));
     }
   },

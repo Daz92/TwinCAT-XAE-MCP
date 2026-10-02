@@ -307,9 +307,7 @@ Scope + Analytics (`TIAN`): `scope_create`, `scope_add_child`, `scope_rename`,
 `analytics_get` returns the native `TIAN` configuration with MQTT secrets redacted.
 `analytics_set` takes an `op`: `logger_enable`, `target_add` (`copyFrom` takes a
 `targetId` and clones its encrypted credentials), `target_edit` (`targetId`),
-`context_hide`, `stream_add` (experimental: `CreateChild` on the context throws `E_NOTIMPL` live, so it
-falls back to `ConsumeXml` of `<AddStream Name IsEventBased/>` on the context, unverified; `via`
-says which ran), `stream_remove` 🔒. Each write re-reads the
+`context_hide`, `stream_add`, `stream_remove` 🔒. Each write re-reads the
 full XML and changes only the requested fields. Pass `dryRun:true` to see `plannedDiff`.
 After a write the full state is read twice (immediately and after `settleMs`); check
 `verified`, `notAsPlanned` and `unstable`. A write is refused when the state changed
@@ -327,7 +325,21 @@ with `tsprojBeforeSave` / `tsprojAfterSave` stamps; then it is unloaded
 edited (backup `<name>.tsproj.te1000-<UTC>.bak`, only the edited element's bytes change) and the project is reloaded or
 the solution reopened. The
 result reports `mode` (`unload` | `reopen`), `backup`, `plannedDiff` and `verified`; a
-`dryRun` reports the mode and whether the edit applies, touching nothing. Do not use `tc_tree set_xml` on
+`dryRun` reports the mode and whether the edit applies, touching nothing.
+
+`stream_add` (`callerOid`, `name`, optional `copyFrom` = a `streamOid`, `targetId`, `fields`,
+`symbols`) is offline too: live, `CreateChild` on a stream context throws `E_NOTIMPL` and
+`ConsumeXml` of `<AddStream/>` is ignored. It clones an existing `Stream` element (`copyFrom`, else
+a stream in the same context, else any stream) into the context, with OID = the highest
+`0x0204xxxx` stream OID + 1 (the file has no allocator or OID registry; `streamOid`, also on
+`dryRun`), the new `Name`, `ClientID` `<ams>_<context>_<name>_0x<OID>` and the source's own
+`RefStreamOid` start/stop/backup leaves pointed at the new OID, then `targetId` (default the
+source's), `fields` and `symbols`. A hidden context is unhidden (its `Hide` attribute removed; on
+disk every context with a stream has none), reported as `unhide`. `verified` = `analytics_get`
+finds that OID under the context with that name. `stream_remove` tries `DeleteChild` on the
+context first; if it throws or the settled read still has the stream, it removes the `Stream`
+element offline (`via` = `deleteChild` | `offline`). It is refused while another stream's
+`RefStreamOid` points at it, and its `dryRun` checks the offline edit. Do not use `tc_tree set_xml` on
 `TIAN`: a partial `ConsumeXml` replaces the whole `Config`, and echoing
 `StreamContexts` re-selects every source. `logger_create` is refused on the native
 model, which has no DataLogger objects.

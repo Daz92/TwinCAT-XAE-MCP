@@ -77,7 +77,10 @@ test("offline analytics_set ops ask unless dryRun; other ops pass", () => {
   const set = (input) => decide(call("tc_measurement", { action: "analytics_set", ...input })).decision;
   assert.equal(set({ op: "stream_edit", streamOid: "0x1" }), "ask");
   assert.equal(set({ op: "target_remove", targetId: "g", confirm: "ALLOW_TWINCAT_DELETE" }), "ask");
+  assert.equal(set({ op: "stream_add", callerOid: "0x1", name: "s" }), "ask");
+  assert.equal(set({ op: "stream_remove", streamOid: "0x1" }), "ask");
   assert.equal(set({ op: "stream_edit", dryRun: true }), "allow");
+  assert.equal(set({ op: "stream_add", callerOid: "0x1", name: "s", dryRun: true }), "allow");
   assert.equal(set({ op: "target_edit", targetId: "g" }), "allow");
 });
 

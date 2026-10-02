@@ -26,7 +26,7 @@ All notable changes to this project are documented here. The format is based on
   symbol count). Streams are hidden from `LookupTreeItem` and child enumeration; they are
   found through `TIAN` `AdiOids` + `LookupTreeItemById(0, oid)` (ItemType 102).
 - **`tc_measurement analytics_set`** — `op` = `logger_enable`, `target_add` / `target_edit`,
-  `context_hide`, `stream_add` (experimental) / `stream_remove` (delete-guarded).
+  `context_hide`, `stream_add` / `stream_remove` (delete-guarded).
   Full-XML read-modify-write inside the daemon (credentials never leave it), `dryRun`
   plan, and after every write a full-state re-read (immediate and after `settleMs`) with
   a redacted diff, `notAsPlanned`, `unstable` and `verified`. Writes are refused while
@@ -106,10 +106,25 @@ All notable changes to this project are documented here. The format is based on
   refuses naming the owning `.tsproj` to save instead; it used to list the solution projects only.
   EnvDTE `Project.Saved` is not authoritative (live: the `.tsproj` read saved while its save wrote
   the `.plcproj` too); `saved` stays judged by file stamps.
-- `analytics_set stream_add` falls back to `ConsumeXml` of `<AddStream Name IsEventBased="false"/>` on
-  the context item (TF3500's own `StreamContextModel.CreateStreamProgrammatically` form, no `Oid`
-  sent; unverified) when `CreateChild` throws `E_NOTIMPL`. `via` (`createChild` | `consumeXml`)
-  reports the path; `verified` still comes from the post-settle read.
+- `analytics_set stream_add` is an offline `.tsproj` edit like `stream_edit`. Live, `CreateChild` on
+  a stream context throws `E_NOTIMPL`, and the `ConsumeXml` `<AddStream Name IsEventBased="false"/>`
+  fallback on the context item was silently ignored (`verified: false`, nothing added); both are
+  gone, with the `subType` parameter. It clones an existing disk `Stream` element (`copyFrom` =
+  `streamOid`, else a stream in the same context, else any) under
+  `StreamContext[@CallerOid]`, with a new OID = highest `0x0204xxxx` stream OID + 1 (`@Id`
+  `#x%08x`, `@oid` `#x%x`; no allocator, counter or OID registry exists on disk), the new `Name`,
+  `Config/ClientID` `<ams>_<context>_<name>_0x<OID>` and the source's own
+  `Config/{StreamStartSettings,StreamStopSettings,BackupConditionSettings}/RefStreamOid` rewritten,
+  then `targetId` (default the source's), `fields` and `symbols`. A hidden context is unhidden by
+  removing its `Hide` attribute (`unhide`). `dryRun` returns `plannedDiff`, `mode`,
+  `fileEditChecked` and the `streamOid` it would use; `verified` = the settled read has that OID
+  under the context with that name.
+- `analytics_set stream_remove` falls back to removing the `Stream` element offline when
+  `DeleteChild` throws or the settled read still has the stream (`via` = `deleteChild` |
+  `offline`); refused while another stream's `RefStreamOid` points at it. Its `dryRun` checks the
+  offline edit.
+- The te1000 guard asks before non-`dryRun` `stream_add` / `stream_remove`, and both get the
+  15-minute ceiling, since they can close and reopen the solution.
 - Offline `analytics_set` `target_remove` / `stream_edit` save the `.tsproj` project before
   unloading or closing (`savedBeforeClose`). Its `Project.Saved` misses nested PLC changes made
   without an open editor, which `reopen`'s `Solution.Close(false)` dropped. Other unsaved
@@ -136,7 +151,8 @@ All notable changes to this project are documented here. The format is based on
   owning `.tsproj` (`... cannot be saved on its own (nothing saved). Save '<tsproj>' instead`).
 - The build with the 15-minute ceiling for long-running actions compiles.
 - `analytics_set stream_add` via `CreateChild` on a stream context throws `E_NOTIMPL` ("The method
-  or operation is not implemented").
+  or operation is not implemented"), and `ConsumeXml` of `<AddStream Name IsEventBased="false"/>` on
+  the context item is accepted but adds nothing.
 
 ### Removed
 - Unreachable `tc_measurement` `node_get_xml` / `node_set_xml` switch cases (not in the schema;

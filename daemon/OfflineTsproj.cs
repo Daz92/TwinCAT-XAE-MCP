@@ -258,6 +258,32 @@ namespace Te1000Daemon
             return t.Substring(0, e.StartTagEnd) + escaped + t.Substring(e.ContentEnd);
         }
 
+        // Sets an attribute the start tag already carries, keeping its position and
+        // quote; value null removes it with its leading whitespace.
+        public static string SetAttribute(string t, Span e, string name, string value)
+        {
+            string tag = t.Substring(e.Start, e.StartTagEnd - e.Start);
+            Match m = Regex.Match(tag, "(\\s+)" + Regex.Escape(name) + "\\s*=\\s*(\"[^\"]*\"|'[^']*')");
+            if (!m.Success) throw new BridgeException("<" + e.Name + "> has no " + name + " attribute in the .tsproj");
+            string repl = "";
+            if (value != null)
+            {
+                char q = m.Groups[2].Value[0];
+                repl = m.Groups[1].Value + name + "=" + q + value.Replace("&", "&amp;").Replace("<", "&lt;").Replace(q.ToString(), q == '"' ? "&quot;" : "&apos;") + q;
+            }
+            return t.Substring(0, e.Start) + tag.Substring(0, m.Index) + repl + tag.Substring(m.Index + m.Length) + t.Substring(e.StartTagEnd);
+        }
+
+        // Inserts element text on its own line after the element, at its indentation.
+        public static string InsertAfter(string t, Span after, string element)
+        {
+            int ls = t.LastIndexOf('\n', Math.Max(0, after.Start - 1)) + 1;
+            string indent = t.Substring(ls, after.Start - ls);
+            if (indent.Trim().Length != 0) throw new BridgeException("<" + after.Name + "> does not start its own line in the .tsproj");
+            string nl = t.IndexOf("\r\n", StringComparison.Ordinal) >= 0 ? "\r\n" : "\n";
+            return t.Substring(0, after.End) + nl + indent + element + t.Substring(after.End);
+        }
+
         // The edited text must parse to exactly the original document with plan
         // applied; anything else (a mis-scanned span, a stray byte) is refused.
         public static void AssertPlanned(string original, string edited, Action<XmlDocument> plan)
@@ -276,7 +302,7 @@ namespace Te1000Daemon
             return d;
         }
 
-        private static List<Span> Children(string t, Span e)
+        public static List<Span> Children(string t, Span e)
         {
             var l = new List<Span>();
             if (e.Empty) return l;
@@ -294,7 +320,7 @@ namespace Te1000Daemon
             return l;
         }
 
-        private static Span ReadElement(string t, int lt)
+        public static Span ReadElement(string t, int lt)
         {
             var s = new Span();
             s.Start = lt;
