@@ -68,6 +68,33 @@ All notable changes to this project are documented here. The format is based on
   `CreateChild returned null` ghost error (DataLogger objects do not exist there).
 - `stream_create` accepts the live StreamHelper name `<name> (StreamHelper)` as well as
   the documented `<name>_Obj1 (StreamHelper)`; `stream_delete` tries both.
+- `plc_pou create` passes `CreateChild` vInfo as a scalar language or a `string[]`, as the
+  Automation Interface documents. XAE rejected the old `object[]` (`The specified vInfo (Type:
+  Object[]) is not supported for creating TreeItem type 'TREEITEMTYPE_PLCMETHOD'`). A Method (609)
+  takes an optional `returnType`.
+- `plc_project open` keeps a project XAE opens under a name other than the requested one (it was
+  deleted as a ghost) and returns its real `pathName`, with `requestedName`.
+- `plc_pou replace_lines` accepts `text: ""` (deletes the span, no blank line left).
+- The remaining `1..ChildCount` loops use the `ComHelpers.Children` fallback: template-import
+  snapshots, `plc_pou outline` children, the analytics child-name check, `nc` task/axis listing and
+  lookup, `tc_task list` (whose `count` is now the number returned).
+- `analytics_set stream_add` reports `verified` (a new stream OID under the requested context with
+  the requested name in the post-settle read) and `streamOid`. `stream_remove` `verified` was always
+  false, because the diff collapses a removed stream into one `stream[<oid>]` entry; it now checks
+  the post-settle read.
+- `xae_open_solution`, solution/PLC archive saves, PLCopen export/import and `save_as_library` are
+  exempt from the 180 s default ceiling, like builds.
+- `tc_link link_batch` refuses, before calling the daemon, any `links[]` entry without `b`.
+- `xae save_project` reports `saved` when the project file or any project file under its directory
+  (`.xti`, `.plcproj`, `.TcPOU`, ...) changed, with `savedFiles` and EnvDTE `Project.Saved`
+  before/after (`projectSavedBefore` / `projectSavedAfter`).
+- Read-only actions (`xae status` / `error_list`, `plc_pou` tree/find/search/outline/get_decl/
+  get_impl, `analytics_get`, `tc_tree` get/get_batch/children/get_xml) retry on a retryable COM
+  error through `ComHelpers.WithRetry`, which had no callers. Mutations are never retried.
+
+### Removed
+- Unreachable `tc_measurement` `node_get_xml` / `node_set_xml` switch cases (not in the schema;
+  `tc_tree get_xml` / `set_xml` remain).
 
 ## [2.4.1] — 2026-09-24
 
