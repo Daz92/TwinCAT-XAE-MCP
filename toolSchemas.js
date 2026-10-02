@@ -170,7 +170,7 @@ const toolSchemas = {
       a: z.string(),
       b: z.string().optional(),
       autoResolve: z.boolean().default(true),
-      links: z.array(z.object({ a: z.string(), b: z.string().optional() })).optional(),
+      links: z.array(z.object({ a: z.string(), b: z.string().optional() })).optional().describe("link_batch: b required in every entry; unlink_batch: b optional"),
       save: z.boolean().optional(),
       verbose: z.boolean().optional().describe("link/resolve: return the full resolution detail (producerResolution/consumerResolution or attempts[]); default compact"),
       details: z.boolean().optional().describe("link_batch/unlink_batch: include ok:true rows (with resolved paths); default failures-only"),

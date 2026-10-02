@@ -311,6 +311,9 @@ server.registerTool(
     if (action === "unlink") return textResult(await bridgeCall("twincat_unlink_variables", { variableA: a, variableB: b }));
     if (action === "link_batch") {
       need({ links }, ["links"], action);
+      // links is shared with unlink_batch (b optional there), so b is enforced here.
+      const noB = links.flatMap((l, i) => (typeof l.b === "string" && l.b.length > 0 ? [] : [i]));
+      if (noB.length > 0) throw new Error("link_batch: every links[] entry needs b (missing at index " + noB.join(", ") + ")");
       return textResult(await bridgeCall("twincat_link_variables_batch", { links, autoResolve, save: save === true, details: details === true }));
     }
     if (action === "unlink_batch") {
