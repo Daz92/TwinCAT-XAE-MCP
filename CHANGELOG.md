@@ -95,6 +95,16 @@ All notable changes to this project are documented here. The format is based on
   the post-settle read.
 - `xae_open_solution`, solution/PLC archive saves, PLCopen export/import and `save_as_library` are
   exempt from the 180 s default ceiling, like builds.
+- Long-running actions (`LongRunningActions` and non-`dryRun` `analytics_set` `target_remove` /
+  `stream_edit`) get a 15-minute ceiling. They were meant to have none, but `ComWorker.Run` turns a
+  0 budget into its 180 s default, so a live `target_remove` reported a timeout while the daemon
+  finished the edit. An explicit `timeoutMs` still overrides; the dialog-blocked and timeout
+  messages are unchanged.
+- `xae save_project` on a PLC project nested in the `.tsproj` (PLC name or `.plcproj` path)
+  refuses naming the owning `.tsproj` to save instead; it used to list the solution projects only.
+  EnvDTE `Project.Saved` is not authoritative (live: the `.tsproj` read saved while its save wrote
+  the `.plcproj` too); `saved` stays judged by file stamps, and the offline `.tsproj` edit's
+  saved-state check cannot see nested PLC changes made without an open editor, so `save_all` first.
 - `tc_link link_batch` refuses, before calling the daemon, any `links[]` entry without `b`.
 - `xae save_project` reports `saved` when the project file or any project file under its directory
   (`.xti`, `.plcproj`, `.TcPOU`, ...) changed, with `savedFiles` and EnvDTE `Project.Saved`
@@ -102,6 +112,14 @@ All notable changes to this project are documented here. The format is based on
 - Read-only actions (`xae status` / `error_list`, `plc_pou` tree/find/search/outline/get_decl/
   get_impl, `analytics_get`, `tc_tree` get/get_batch/children/get_xml) retry on a retryable COM
   error through `ComHelpers.WithRetry`, which had no callers. Mutations are never retried.
+
+### Verified live
+- `plc_pou create` for the cases that failed with 603, 604, extends, 608, 609 (with and without
+  `returnType`) and 611.
+- `plc_pou replace_lines` with `text: ""`.
+- `analytics_set target_add` with `copyFrom`.
+- Offline `analytics_set target_remove` in mode `reopen`: byte-exact file edit. Solution
+  Explorer offers no Unload Project for a `.tsproj` node, so `reopen` is the path in practice.
 
 ### Removed
 - Unreachable `tc_measurement` `node_get_xml` / `node_set_xml` switch cases (not in the schema;
